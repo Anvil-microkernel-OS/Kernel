@@ -49,7 +49,7 @@ pub struct IOApic {
 impl IOApic {
     pub fn new() -> Self {
         let acpi = get_acpi_tables().read();
-        let ioapic = acpi.get_table::<MadTable>().unwrap().ioapics.get(0).unwrap();
+        let ioapic = acpi.get_table::<MadTable>().unwrap().ioapics.first().unwrap();
         
         let ioapic_converted = VirtAddr::new(phys_to_virt(ioapic.address.as_u64() as usize) as u64);
 

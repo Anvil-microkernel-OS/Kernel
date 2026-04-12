@@ -164,7 +164,7 @@ pub fn make_init_task(
     unsafe {
         stack_top_ptr.sub(1).write(stack_top_va - 8);           // rsp
         stack_top_ptr.sub(2).write(USER_ENTRY_VADDR);           // rip
-        stack_top_ptr.sub(3).write(user_task_trampoline as u64);// ret
+        stack_top_ptr.sub(3).write(user_task_trampoline as *const () as u64);// ret
         for i in 4..=18 {
             stack_top_ptr.sub(i).write(0);
         }
@@ -223,7 +223,7 @@ pub fn make_kernel_task(id: TaskId, entry_point: u64) -> Task {
     let kernel_stack = allocate_kernel_stack(DEFAULT_KERNEL_STACK_SIZE);
     let stack_top_ptr = kernel_stack.top.as_u64() as *mut u64;
     unsafe {
-        stack_top_ptr.sub(1).write(kernel_task_trampoline as u64);
+        stack_top_ptr.sub(1).write(kernel_task_trampoline as *const () as u64);
         for i in 2..=16 {
             stack_top_ptr.sub(i).write(0);
         }

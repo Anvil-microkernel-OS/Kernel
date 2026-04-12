@@ -93,27 +93,27 @@ impl Handler for MainTableParser {
         Port::<u32>::new(port).write(value) 
     }
 
-    fn read_pci_u8(&self, address: acpi::PciAddress, offset: u16) -> u8 {
+    fn read_pci_u8(&self, _address: acpi::PciAddress, _offset: u16) -> u8 {
         todo!()
     }
 
-    fn read_pci_u16(&self, address: acpi::PciAddress, offset: u16) -> u16 {
+    fn read_pci_u16(&self, _address: acpi::PciAddress, _offset: u16) -> u16 {
         todo!()
     }
 
-    fn read_pci_u32(&self, address: acpi::PciAddress, offset: u16) -> u32 {
+    fn read_pci_u32(&self, _address: acpi::PciAddress, _offset: u16) -> u32 {
         todo!()
     }
 
-    fn write_pci_u8(&self, address: acpi::PciAddress, offset: u16, value: u8) {
+    fn write_pci_u8(&self, _address: acpi::PciAddress, _offset: u16, _value: u8) {
         todo!()
     }
 
-    fn write_pci_u16(&self, address: acpi::PciAddress, offset: u16, value: u16) {
+    fn write_pci_u16(&self, _address: acpi::PciAddress, _offset: u16, _value: u16) {
         todo!()
     }
 
-    fn write_pci_u32(&self, aaddress: acpi::PciAddress, offset: u16, value: u32) {
+    fn write_pci_u32(&self, _aaddress: acpi::PciAddress, _offset: u16, _value: u32) {
         todo!()
     }
 
@@ -121,11 +121,11 @@ impl Handler for MainTableParser {
         0
     }
 
-    fn stall(&self, microseconds: u64) {
+    fn stall(&self, _microseconds: u64) {
         hlt_loop()
     }
 
-    fn sleep(&self, milliseconds: u64) {
+    fn sleep(&self, _milliseconds: u64) {
         hlt_loop()
     }
 
@@ -133,9 +133,9 @@ impl Handler for MainTableParser {
         acpi::Handle(0)
     }
 
-    fn acquire(&self, mutex: acpi::Handle, timeout: u16) -> Result<(), acpi::aml::AmlError> {
+    fn acquire(&self, _mutex: acpi::Handle, _timeout: u16) -> Result<(), acpi::aml::AmlError> {
         todo!()
     }
 
-    fn release(&self, mutex: acpi::Handle) {}
+    fn release(&self, _mutex: acpi::Handle) {}
 }

@@ -1,5 +1,5 @@
-pub const MSR_GS_BASE: u32 = 0xC000_0101;        
-pub const MSR_KERNEL_GS_BASE: u32 = 0xC000_0102; 
+pub const MSR_GS_BASE: u32 = 0xC000_0101;
+pub const MSR_KERNEL_GS_BASE: u32 = 0xC000_0102;
 
 #[inline(always)]
 pub unsafe fn rdmsr(msr: u32) -> u64 {
@@ -92,7 +92,6 @@ macro_rules! __raw_define_per_cpu {
     };
 }
 
-
 #[macro_export]
 macro_rules! define_per_cpu_u8 {
     ($(#[$attr:meta])* $vis:vis $name:ident) => {
@@ -122,7 +121,7 @@ macro_rules! define_per_cpu_u16 {
 #[macro_export]
 macro_rules! define_per_cpu_u32 {
     ($(#[$attr:meta])* $vis:vis $name:ident) => {
-        #[allow(non_snake_case)]
+        
         $crate::__raw_define_per_cpu!(
             section = ".percpu.bss",
             $(#[$attr])*
@@ -135,7 +134,7 @@ macro_rules! define_per_cpu_u32 {
 #[macro_export]
 macro_rules! define_per_cpu_u64 {
     ($(#[$attr:meta])* $vis:vis $name:ident) => {
-        #[allow(non_snake_case)]
+        
         $crate::__raw_define_per_cpu!(
             section = ".percpu.bss",
             $(#[$attr])*

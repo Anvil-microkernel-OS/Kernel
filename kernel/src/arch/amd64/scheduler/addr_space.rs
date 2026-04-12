@@ -81,7 +81,7 @@ impl AddrSpace {
         backing: VmaBacking,
         flags:   MapFlags,
     ) -> Result<(), VmaError> {
-        if !vaddr.is_aligned(PAGE_SIZE as u64) || size % PAGE_SIZE != 0 {
+        if !vaddr.is_aligned(PAGE_SIZE as u64) || !size.is_multiple_of(PAGE_SIZE) {
             return Err(VmaError::NotAligned);
         }
 

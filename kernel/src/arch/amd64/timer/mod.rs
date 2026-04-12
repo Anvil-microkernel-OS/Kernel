@@ -2,10 +2,13 @@ use core::ptr::{NonNull, read_volatile, write_volatile};
 
 use spin::{Once, RwLock};
 
-use crate::{arch::amd64::{
-    acpi::{get_acpi_tables, hpet::HpetTableParsed},
-    memory::vmm::map_mmio_region,
-}, early_println};
+use crate::{
+    arch::amd64::{
+        acpi::{get_acpi_tables, hpet::HpetTableParsed},
+        memory::vmm::map_mmio_region,
+    },
+    early_println,
+};
 
 const HPET_CFG_ENABLE: u64 = 1 << 0;
 const HPET_CFG_LEGACY: u64 = 1 << 1;
@@ -22,22 +25,20 @@ fn mmio_write<T>(ptr: *mut T, val: T) {
 
 #[repr(C)]
 struct HpetRegisters {
-    general_cap_id:     u64,      // 0x000
-    _rsv0:              u64,      // 0x008
-    general_config:     u64,      // 0x010
-    _rsv_cfg2:          u64,      // 0x018 (RESERVED)
-    general_int_status: u64,      // 0x020
-    _rsv1:              [u64; 25],// 0x028 .. 0x0EF
-    main_counter:       u64,      // 0x0F0
+    general_cap_id: u64,     // 0x000
+    _rsv0: u64,              // 0x008
+    general_config: u64,     // 0x010
+    _rsv_cfg2: u64,          // 0x018 (RESERVED)
+    general_int_status: u64, // 0x020
+    _rsv1: [u64; 25],        // 0x028 .. 0x0EF
+    main_counter: u64,       // 0x0F0
 }
 
 static HPET_GLOBAL: Once<RwLock<HPET>> = Once::new();
 
 #[inline]
-pub fn get_hpet() -> &'static RwLock<HPET>{
-    HPET_GLOBAL
-        .get()
-        .expect("HPET not inited yet")
+pub fn get_hpet() -> &'static RwLock<HPET> {
+    HPET_GLOBAL.get().expect("HPET not inited yet")
 }
 
 pub struct HPET {
@@ -85,7 +86,7 @@ impl HPET {
 
     pub fn is_ticking(&self, spins: u32) -> bool {
         let a = self.read_counter();
-        let mut b = a;
+        let mut b;
 
         for _ in 0..spins {
             core::hint::spin_loop();
@@ -98,7 +99,6 @@ impl HPET {
     }
 }
 
-
 pub fn initialize_hpet() {
     let hpet_phys_base = {
         let guard = get_acpi_tables().read();
@@ -110,13 +110,10 @@ pub fn initialize_hpet() {
 
     let hpet_virt = map_mmio_region(hpet_phys_base, core::mem::size_of::<HpetRegisters>());
 
-    let regs = NonNull::new(hpet_virt.as_mut_ptr::<HpetRegisters>())
-        .expect("HPET MMIO mapping failed");
+    let regs =
+        NonNull::new(hpet_virt.as_mut_ptr::<HpetRegisters>()).expect("HPET MMIO mapping failed");
 
-    let mut hpet = HPET {
-        regs,
-        period_fs: 0,
-    };
+    let mut hpet = HPET { regs, period_fs: 0 };
 
     hpet.init(true);
 
@@ -126,8 +123,5 @@ pub fn initialize_hpet() {
         early_println!("HPET is not ticking! Fallback to lapic timer...");
     }
 
-    HPET_GLOBAL.call_once(|| {
-        RwLock::new(hpet)
-    });
+    HPET_GLOBAL.call_once(|| RwLock::new(hpet));
 }
-

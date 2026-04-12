@@ -96,7 +96,7 @@ impl ScrollingFbTextRenderer {
         let glyph_offset = self.get_glyph_offset(ch);
         let glyph_data = &self.font_data[glyph_offset..glyph_offset + self.bytes_per_glyph];
         
-        let bytes_per_line = (self.char_width + 7) / 8;
+        let bytes_per_line = self.char_width.div_ceil(8);
 
         for row in 0..self.char_height {
             let line_offset = row * bytes_per_line;

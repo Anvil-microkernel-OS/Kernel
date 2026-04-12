@@ -86,7 +86,7 @@ impl Zone {
             .map(|run| {
                 let s = core::cmp::max(run.start, self.base_pfn);
                 let e = core::cmp::min(run.end(),  zone_end);
-                if s < e { e - s } else { 0 }
+                e.saturating_sub(s)
             })
             .sum()
     }

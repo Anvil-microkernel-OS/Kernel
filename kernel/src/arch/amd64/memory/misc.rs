@@ -17,12 +17,12 @@ pub fn floor_log2(x: usize) -> usize {
 
 #[inline]
 pub fn virt_to_phys(virt: usize) -> usize {
-    return virt - unsafe { HHDM_OFFSET };
+    virt - unsafe { HHDM_OFFSET }
 }
 
 #[inline]
 pub fn phys_to_virt(phys: usize) -> usize {
-    return phys + unsafe { HHDM_OFFSET };
+    phys + unsafe { HHDM_OFFSET }
 }
 
 #[inline]

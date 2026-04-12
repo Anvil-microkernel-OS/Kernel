@@ -3,7 +3,7 @@ use core::arch::naked_asm;
 use spin::Mutex;
 use x86_64::{VirtAddr, registers::{control::{Efer, EferFlags}, model_specific::{LStar, SFMask}, rflags::RFlags}};
 
-use crate::{arch::amd64::{gdt::{USER_CODE_SELECTOR, USER_DATA_SELECTOR}, ipc::{message::{FastMessage, MsgLabel}}, scheduler::{PerCpuSchedulerData, syscall::{ipc_handlers::{IpcSyscallNumbers, handle_ipc_call, handle_ipc_ep_create, handle_ipc_ep_destroy, handle_ipc_recv, handle_ipc_reply, handle_ipc_send}, memory_handler::{MemorySyscallNumbers, frame_alloc, mprotect, vma_map, vma_unmap}, thread_handler::{ThreadSyscallNums, thread_sleep}}, task::TaskRegisters}}, define_per_cpu_u64, early_print, early_println};
+use crate::{arch::amd64::{gdt::{USER_CODE_SELECTOR, USER_DATA_SELECTOR}, scheduler::{PerCpuSchedulerData, syscall::{ipc_handlers::{IpcSyscallNumbers, handle_ipc_call, handle_ipc_ep_create, handle_ipc_ep_destroy, handle_ipc_recv, handle_ipc_reply, handle_ipc_send}, memory_handler::{MemorySyscallNumbers, frame_alloc, mprotect, vma_map, vma_unmap}, thread_handler::{ThreadSyscallNums, thread_sleep}}, task::TaskRegisters}}, define_per_cpu_u64, early_print, early_println};
 
 mod ipc_handlers;
 mod memory_handler;
@@ -84,7 +84,7 @@ fn syscall_dispatcher(registers: &mut TaskRegisters, args: &SyscallArguments) ->
 
         _ => {
             early_println!("Unknown syscall: {} task={}", args.syscall_number, curr_task_id);
-            return 0;
+            0
         }
     }
 }
@@ -99,7 +99,7 @@ pub fn init_syscall_subsystem() {
 
     SFMask::write(RFlags::INTERRUPT_FLAG);
 
-    let syscall_handler_addr = VirtAddr::new(syscall_handler as u64);
+    let syscall_handler_addr = VirtAddr::new(syscall_handler as *const () as u64);
     LStar::write(syscall_handler_addr);
 }
 

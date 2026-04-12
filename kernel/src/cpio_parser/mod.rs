@@ -106,11 +106,10 @@ impl<'a> Iterator for CpioIter<'a> {
 
 pub fn cpio_find<'a>(archive: &'a [u8], filename: &str) -> Option<&'a [u8]> {
     for entry in CpioIter::new(archive) {
-        if let Ok(e) = entry {
-            if e.name == filename || e.name.ends_with(filename) {
+        if let Ok(e) = entry
+            && (e.name == filename || e.name.ends_with(filename)) {
                 return Some(e.data);
             }
-        }
     }
     None
 }

@@ -1,4 +1,4 @@
-use crate::arch::amd64::{ipc::{message::{Capability, Rights}, object_table::{HandleRef, KernelObjType, with_object}}, scheduler::task::Task};
+use crate::arch::amd64::{ipc::{message::Rights, object_table::{HandleRef, KernelObjType, with_object}}, scheduler::task::Task};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CapError {

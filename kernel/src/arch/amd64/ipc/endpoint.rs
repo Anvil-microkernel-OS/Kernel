@@ -138,7 +138,7 @@ impl Endpoint {
 
     pub fn new_with_id(id: EndpointId) -> Self {
         Self {
-            id:         id,
+            id,
             recv_queue: WaitQueue::new(),
             closed:     false,
         }

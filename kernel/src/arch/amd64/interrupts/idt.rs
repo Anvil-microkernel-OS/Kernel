@@ -83,7 +83,7 @@ impl IDTEntry {
 }
 
 fn handle_specific_interrupts(idt_num: usize, vectors: &mut [IDTEntry], handler: *const ()) -> bool {
-    if idt_num == 3 as usize {
+    if idt_num == 3_usize {
         vectors[idt_num] = IDTEntry::new(
             handler,
             CS::get_reg(),
@@ -95,7 +95,7 @@ fn handle_specific_interrupts(idt_num: usize, vectors: &mut [IDTEntry], handler:
         return true;
     }
 
-    if idt_num == 128 as usize {
+    if idt_num == 128_usize {
         vectors[idt_num] = IDTEntry::new(
             handler,
             CS::get_reg(),
@@ -107,7 +107,7 @@ fn handle_specific_interrupts(idt_num: usize, vectors: &mut [IDTEntry], handler:
         return true;
     }
 
-    if idt_num == 14 as usize {
+    if idt_num == 14_usize {
         vectors[idt_num] = IDTEntry::new(
             handler,
             CS::get_reg(),
@@ -119,7 +119,7 @@ fn handle_specific_interrupts(idt_num: usize, vectors: &mut [IDTEntry], handler:
         return true;
     }
 
-    if idt_num == 8 as usize {
+    if idt_num == 8_usize {
         vectors[idt_num] = IDTEntry::new(
             handler,
             CS::get_reg(),
@@ -131,7 +131,7 @@ fn handle_specific_interrupts(idt_num: usize, vectors: &mut [IDTEntry], handler:
         return true;
     }
 
-    return false;
+    false
 }
 
 lazy_static! {

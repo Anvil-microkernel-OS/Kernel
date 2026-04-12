@@ -1,6 +1,6 @@
 use alloc::{collections::{VecDeque, btree_map::BTreeMap}, sync::Arc};
 use spin::{Mutex, Once};
-use crate::{arch::amd64::scheduler::task::{Task, TaskId, TaskIdIndex}, early_println};
+use crate::arch::amd64::scheduler::task::{Task, TaskId, TaskIdIndex};
 
 pub struct TaskTable {
     pub tasks: Mutex<BTreeMap<TaskIdIndex, Arc<Task>>>,
@@ -54,7 +54,7 @@ static GLOBAL_RUN_QUEUE:  Once<GlobalRunQueue> = Once::new();
 
 pub fn initialize_task_storage() {
     TASK_TABLE.call_once(TaskTable::new);
-    GLOBAL_RUN_QUEUE.call_once(|| GlobalRunQueue::new());
+    GLOBAL_RUN_QUEUE.call_once(GlobalRunQueue::new);
 }
 
 pub fn add_task_to_execute(task: Arc<Task>) -> TaskId {

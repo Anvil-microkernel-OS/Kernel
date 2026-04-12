@@ -14,7 +14,7 @@ mod syscall;
 use crate::{
     arch::amd64::{
         apic::{PercpuLapic, start_timer}, gdt::set_tss_rsp0, scheduler::{cpu_local::ExecCpu, exec_loader::make_kernel_task, syscall::{init_syscall_subsystem, set_per_cpu_TOP_OF_KERNEL_STACK}, task::{Task, TaskId, TaskIdIndex, TaskState}, task_storage::{add_task_to_execute, get_task_by_index, initialize_task_storage, steal_from_global, table}}
-    }, define_per_cpu_struct, early_println, irq
+    }, define_per_cpu_struct, irq
 };
 
 static CPU_NUM: AtomicU64 = AtomicU64::new(0);
@@ -30,16 +30,16 @@ impl CpuDescriptorStorage {
     pub fn new(n_cpus: usize) -> Self {
         let mut cpus = Vec::with_capacity(n_cpus);
         initialize_task_storage();
-        for _ in 0..n_cpus { cpus.push(UnsafeCell::new(ExecCpu::new(make_kernel_task(TaskId::new(0), idle_task as u64)))); }
+        for _ in 0..n_cpus { cpus.push(UnsafeCell::new(ExecCpu::new(make_kernel_task(TaskId::new(0), idle_task as *const () as u64)))); }
         Self { cpus }
     }
 
     pub fn cpu(&self, cpu: usize) -> &ExecCpu {
-        unsafe { return &*self.cpus[cpu].get(); }
+        unsafe { &*self.cpus[cpu].get()}
     }
 
     pub fn cpu_mut(&self, cpu: usize) -> &mut ExecCpu {
-        unsafe { return &mut *self.cpus[cpu].get(); }
+        unsafe { &mut *self.cpus[cpu].get()}
     }
 
     pub fn try_to_steal_into(&self, me: usize, buf: &mut [Option<Arc<Task>>]) -> usize {
@@ -144,7 +144,7 @@ pub fn sleep(ns: u64) {
     let my_desc = PerCpuSchedulerData::get().descriptors.cpu_mut(my_id);
     let curr_ptr = my_desc.get_curr_task();
 
-    let ticks = (ns + 999_999) / 1_000_000;
+    let ticks = ns.div_ceil(1_000_000);
 
     if ticks == 0 {
         return;
@@ -259,12 +259,10 @@ fn process_tick() {
     match (curr_ptr.is_null(), next_task) {
         // no tasks to work, go to idle & try to steal
         (true, None) => {
-            return;
         },
 
         // we have a task, so execute it!
         (false, None) => {
-            return;
         },
 
         (true, Some(next)) => {

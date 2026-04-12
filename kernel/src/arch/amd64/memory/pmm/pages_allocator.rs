@@ -63,7 +63,7 @@ pub fn alloc_pages_by_order(order: usize, flags: PAllocFlags) -> Option<PhysAddr
 
 pub fn free_pages(ptr: PhysAddr) {
     debug_assert!(
-        ptr.as_u64() % PAGE_SIZE as u64 == 0,
+        ptr.as_u64().is_multiple_of(PAGE_SIZE as u64),
         "free_pages: address {:#x} is not page-aligned",
         ptr.as_u64()
     );

@@ -1,10 +1,22 @@
-use core::{arch::asm, sync::atomic::{AtomicU8, Ordering}};
+use core::sync::atomic::{AtomicU8, Ordering};
 
 use alloc::boxed::Box;
 use limine::{mp::Cpu, response::MpResponse};
 use x86_64::instructions;
 
-use crate::{arch::amd64::{apic::init_lapic_percpu, cpu::{hlt_loop, smp::percpu::{PerCpuRegion, init_percpu_regions, set_cpu_id, set_gsbase_for_percpu_region}}, gdt::setup_gdt_for_local_core, interrupts::idt::init_idt, scheduler::{global_init_scheduler, init_scheduler_percpu}}, bootinfo::BootInfo, define_per_cpu_u32, early_println, isr};
+use crate::{
+    arch::amd64::{
+        apic::init_lapic_percpu,
+        cpu::smp::percpu::{
+            PerCpuRegion, init_percpu_regions, set_cpu_id, set_gsbase_for_percpu_region,
+        },
+        gdt::setup_gdt_for_local_core,
+        interrupts::idt::init_idt,
+        scheduler::{global_init_scheduler, init_scheduler_percpu},
+    },
+    bootinfo::BootInfo,
+    early_println,
+};
 
 static NUM_CPUS_BOOTSTRAPPED: AtomicU8 = AtomicU8::new(0);
 
@@ -30,10 +42,10 @@ impl LimineCPU {
         self.cpu.goto_address.write(entry);
     }
 
-    pub (crate) fn bootstrap_bsp_cpu(
+    pub(crate) fn bootstrap_bsp_cpu(
         &self,
         entry: unsafe extern "C" fn(&Cpu) -> !,
-        region: &'static PerCpuRegion
+        region: &'static PerCpuRegion,
     ) {
         let ptr = region as *const PerCpuRegion as u64;
         self.cpu.extra.store(ptr, Ordering::Release);
@@ -56,13 +68,14 @@ impl Iterator for CPUIterator {
 
         Some(LimineCPU {
             mp_response: self.mp_response,
-            cpu: *cpu,
+            cpu,
         })
     }
 }
 
 fn get_smp_entries() -> impl Iterator<Item = LimineCPU> {
-    let mp_response = BootInfo::get().get_smp_response()
+    let mp_response = BootInfo::get()
+        .get_smp_response()
         .expect("failed to get limine SMP response");
 
     CPUIterator {
@@ -133,5 +146,5 @@ pub fn init_bsp_core_smp() -> ! {
 
     unsafe {
         start_ap(bsp_cpu);
-    }   
+    }
 }

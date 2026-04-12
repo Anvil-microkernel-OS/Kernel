@@ -74,7 +74,7 @@ fn percpu_template() -> PerCpuTemplate {
     let data_size = addr(percpu_data_end) - addr(percpu_start);
     let bss_size  = addr(percpu_end) - addr(percpu_data_end);
 
-    let total_size = align_up_usize(data_size + bss_size, PAGE_SIZE as usize);
+    let total_size = align_up_usize(data_size + bss_size, PAGE_SIZE);
 
     let load_ptr = ptr::addr_of!(_percpu_load) as *const u8;
 
@@ -91,7 +91,7 @@ fn construct_region_from_template(dst: *mut u8, tpl: &PerCpuTemplate) {
 }
 
 fn alloc_percpu_region(total_size: usize) -> VirtAddr {
-    let pages = (total_size + PAGE_SIZE as usize - 1) / PAGE_SIZE as usize;
+    let pages = total_size.div_ceil(PAGE_SIZE);
 
     if pages == 1 {
         let phys = alloc_pages_by_order(0, PAllocFlags::KERNEL | PAllocFlags::ZEROED)
@@ -133,5 +133,5 @@ pub fn set_cpu_id(id: u32) {
 }
 
 pub fn get_cpu_id_no_guard() -> u32 {
-    return get_per_cpu_no_guard_CPU_ID();
+    get_per_cpu_no_guard_CPU_ID()
 }

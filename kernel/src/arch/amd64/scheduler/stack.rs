@@ -44,7 +44,7 @@ impl KernelStack {
 
 pub fn allocate_kernel_stack(size: usize) -> KernelStack {
     assert!(
-        size > 0 && size % PAGE_SIZE == 0,
+        size > 0 && size.is_multiple_of(PAGE_SIZE),
         "allocate_kernel_stack: size must be page-aligned and non-zero, got {}",
         size
     );

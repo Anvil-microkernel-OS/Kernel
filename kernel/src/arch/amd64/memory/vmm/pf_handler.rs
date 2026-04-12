@@ -7,7 +7,7 @@ isr!(14, page_fault, |frame| {
     let fault_addr = Cr2::read().unwrap();
     let error = frame.error;
 
-    let is_present  = error & (1 << 0) != 0;
+    let _is_present  = error & (1 << 0) != 0;
     let is_write    = error & (1 << 1) != 0;
     let is_user     = error & (1 << 2) != 0;
 

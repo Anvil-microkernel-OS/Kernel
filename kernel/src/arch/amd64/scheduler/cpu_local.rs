@@ -150,7 +150,7 @@ impl ExecCpu {
     }
 
     pub fn get_curr_task(&self) -> *mut Task {
-        return self.curr_task
+        self.curr_task
     }
 
     pub fn set_curr_task(&mut self, curr_task: *mut Task) {

@@ -1,13 +1,13 @@
 use alloc::collections::btree_map::BTreeMap;
 use spin::Mutex;
-use crate::{arch::amd64::{
+use crate::arch::amd64::{
     ipc::{
         endpoint::{Endpoint, EndpointId},
         message::{Capability, FastMessage, Rights},
         notification::Notification,
     },
     scheduler::task::TaskIdIndex,
-}, early_println};
+};
 
 pub mod endpoint;
 pub mod message;
@@ -66,13 +66,12 @@ impl EndpointTable {
 
     pub fn destroy_endpoint(&mut self, id: EndpointId) {
         for slot in self.endpoints.iter_mut() {
-            if let Some(ep) = slot {
-                if ep.id == id {
+            if let Some(ep) = slot
+                && ep.id == id {
                     ep.close();
                     *slot = None;
                     return;
                 }
-            }
         }
     }
 }
@@ -116,7 +115,7 @@ impl IpcManager {
 
     pub fn handle_send(
         &mut self,
-        sender_id: TaskIdIndex,
+        _sender_id: TaskIdIndex,
         ep_id:     EndpointId,
         msg:       FastMessage,
     ) -> IpcResult {
@@ -125,7 +124,7 @@ impl IpcManager {
             None     => return IpcResult::Error(IpcError::InvalidEndpoint),
         };
 
-        match ep.try_send(msg.clone()) {
+        match ep.try_send(msg) {
             Ok(Some(receiver)) => {
                 self.store_pending_message(receiver, msg);
 

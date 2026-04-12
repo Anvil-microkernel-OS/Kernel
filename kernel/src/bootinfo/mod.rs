@@ -1,4 +1,4 @@
-use limine::{framebuffer::Framebuffer, memory_map::Entry, mp, response::{ModuleResponse, MpResponse}};
+use limine::{framebuffer::Framebuffer, memory_map::Entry, response::{ModuleResponse, MpResponse}};
 use spin::{Once, RwLock, RwLockReadGuard};
 
 use crate::bootinfo::requests::{BASE_REVISION, FRAMEBUFFER_REQUEST, HHDM_REQUEST, MEMMAP_REQUEST, MODULE_REQUEST, RSDP_REQUEST, SMP_REQUEST};

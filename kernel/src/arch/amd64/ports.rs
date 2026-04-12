@@ -10,7 +10,7 @@ impl InOut for u8 {
     fn port_in(port: u16) -> Self {
         let mut val;
         unsafe { asm!("in al, dx", out("al") val, in("dx") port); }
-        return val;
+        val
     }
 
     fn port_out(port: u16, val: Self) {
@@ -22,7 +22,7 @@ impl InOut for u16 {
     fn port_in(port: u16) -> Self {
         let mut val;
         unsafe { asm!("in ax, dx", out("ax") val, in("dx") port); }
-        return val;
+        val
     }
 
     fn port_out(port: u16, val: Self) {
@@ -34,7 +34,7 @@ impl InOut for u32 {
     fn port_in(port: u16) -> Self {
         let mut val;
         unsafe { asm!("in eax, dx", out("eax") val, in("dx") port); }
-        return val;
+        val
     }
 
     fn port_out(port: u16, val: Self) {

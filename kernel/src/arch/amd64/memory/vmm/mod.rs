@@ -158,7 +158,7 @@ pub fn map_region(
     physical_region: &[PhysAddr],
     flags:           PageTableFlags,
 ) -> Result<(), &'static str> {
-    let page_count = virtual_region.clone().count();
+    let page_count = virtual_region.count();
     if physical_region.len() < page_count {
         return Err("map_region: physical_region shorter than virtual_region");
     }
@@ -179,7 +179,7 @@ pub fn unmap_region(
     table:          &mut OffsetPageTable,
     virtual_region: PageRangeInclusive<Size4KiB>,
 ) -> Result<Vec<PhysAddr>, &'static str> {
-    let mut frames = Vec::with_capacity(virtual_region.clone().count());
+    let mut frames = Vec::with_capacity(virtual_region.count());
     for page in virtual_region {
         let (frame, flush) = table.unmap(page).map_err(unmap_error_str)?;
         flush.flush();

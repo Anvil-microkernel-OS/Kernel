@@ -12,7 +12,7 @@ impl BumpState {
     pub const fn init(start: usize, end: usize) -> Self {
         debug_assert!(start < end);
         Self { 
-            end: end, 
+            end, 
             next: start 
         }
     }
