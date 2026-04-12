@@ -1,6 +1,6 @@
 use x86_64::instructions;
 
-use crate::{arch::amd64::{acpi::init_acpi, apic::{init_bootstrap_lapic, init_ioapic}, cpu::{cpuid::get_cpuid_full, smp::startup::smp_startup}, gdt::init_bootstrap_gdt, interrupts::idt::init_idt, memory::{MemoryInitInfo, init_memory_subsys}, timer::initialize_hpet}, bootinfo::BootInfo, early_println};
+use crate::{arch::amd64::{acpi::init_acpi, apic::{init_bootstrap_lapic, init_ioapic}, cpu::{cpuid::get_cpuid_full, smp::startup::{init_bsp_core_smp, smp_startup}}, gdt::init_bootstrap_gdt, interrupts::idt::init_idt, memory::{MemoryInitInfo, init_memory_subsys}, timer::initialize_hpet}, bootinfo::BootInfo, early_println};
 
 pub mod serial;
 pub mod cpu;
@@ -61,4 +61,8 @@ pub fn init_arch() {
     early_startup();
     early_println!("Early startup finished! Initializing SMP...");
     smp_startup();
+}
+
+pub fn final_arch_init() -> ! {
+    init_bsp_core_smp()
 }

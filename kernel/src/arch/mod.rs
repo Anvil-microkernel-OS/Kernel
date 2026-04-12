@@ -8,6 +8,10 @@ pub fn hlt_loop() -> ! {
     current::cpu::hlt_loop();
 }
 
-pub fn arch_init() {
+pub fn early_arch_init() {
     current::init_arch();
+}
+
+pub fn final_arch_init() -> ! {
+    current::final_arch_init()
 }

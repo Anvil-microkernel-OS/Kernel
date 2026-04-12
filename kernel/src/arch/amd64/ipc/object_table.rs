@@ -27,6 +27,7 @@ pub enum ObjData {
 }
 
 pub struct Vmo {
+    pub owner_id: TaskIdIndex,
     pub frames: Vec<PhysAddr>,
     pub size:   usize,
 }

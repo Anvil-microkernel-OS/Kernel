@@ -3,14 +3,11 @@
 #![feature(cell_leak)]
 #![feature(abi_x86_interrupt)]
 
-use core::ptr;
-
 use alloc::sync::Arc;
 
-use crate::arch::amd64::cpu::smp::startup::init_bsp_core_smp;
 use crate::arch::amd64::scheduler::exec_loader::make_init_task;
 use crate::arch::amd64::scheduler::task_storage::add_task_to_execute;
-use crate::arch::{arch_init, hlt_loop};
+use crate::arch::{early_arch_init, final_arch_init, hlt_loop};
 use crate::bootinfo::BootInfo;
 use crate::cpio_parser::cpio_find;
 use crate::early_print::fb_printer::ScrollingFbTextRenderer;
@@ -67,12 +64,12 @@ unsafe extern "C" fn kmain() -> ! {
     
     print_hello_banner();
 
-    arch_init();
+    early_arch_init();
 
     early_println!("Loading init service...");
 
     let init_srvs = BootInfo::get_init_srvs().expect("No init pack of services found!");
-    if let Some(data) = cpio_find(init_srvs, "server.bin") {
+    if let Some(data) = cpio_find(init_srvs, "init.bin") {
         let init = make_init_task(data, 1, init_srvs).unwrap();
         add_task_to_execute(Arc::new(init));
         early_println!("Init service loaded!");
@@ -81,7 +78,7 @@ unsafe extern "C" fn kmain() -> ! {
     }
 
     early_println!("Post init arch...");
-    init_bsp_core_smp();
+    final_arch_init()
 }
 
 #[panic_handler]

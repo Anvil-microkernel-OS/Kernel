@@ -1,58 +1,33 @@
-use crate::arch::amd64::{
+use crate::{arch::amd64::{
     ipc::{
         IPC_MANAGER, IpcError, IpcResult, cnode::CapIdx, endpoint::EndpointId, message::{Capability, FastMessage, MsgLabel, Rights}, object_table::{KernelObjType, KernelObject, ObjData, obj_insert, with_object}
     },
     scheduler::{
         awaken_task, block_current_on_ipc,
-        syscall::{IpcSyscallArguments, cap_check::resolve_cap},
+        syscall::{IpcSyscallArguments, SyscallArguments, SyscallError, cap_check::resolve_cap},
         task::{Task, TaskRegisters},
         task_storage::get_task_by_index,
     },
-};
+}, define_syscall_group};
 
-#[repr(u64)]
-pub(crate) enum IpcSyscallNumbers {
-    IpcSend      = 0x60,
-    IpcRecv      = 0x61,
-    IpcCall      = 0x62,
-    IpcReply     = 0x63,
-    IpcEpCreate  = 0x64,
-    IpcEpDestroy = 0x65,
-}
-
-impl TryFrom<u64> for IpcSyscallNumbers {
-    type Error = ();
-
-    fn try_from(value: u64) -> Result<Self, Self::Error> {
-        match value {
-            x if x == Self::IpcSend as u64 => Ok(Self::IpcSend),
-            x if x == Self::IpcRecv as u64 => Ok(Self::IpcRecv),
-            x if x == Self::IpcCall as u64 => Ok(Self::IpcCall),
-            x if x == Self::IpcReply as u64 => Ok(Self::IpcReply),
-            x if x == Self::IpcEpCreate as u64 => Ok(Self::IpcEpCreate),
-            x if x == Self::IpcEpDestroy as u64 => Ok(Self::IpcEpDestroy),
-            _ => Err(()),
-        }
+define_syscall_group! {
+    pub enum IpcSyscallNumbers {
+        IpcSend      = 0x60,
+        IpcRecv      = 0x61,
+        IpcCall      = 0x62,
+        IpcReply     = 0x63,
+        IpcEpCreate  = 0x64,
+        IpcEpDestroy = 0x65,
     }
-}
-
-#[repr(i64)]
-pub(crate) enum IpcSyscallRetCodes {
-    IpcOk              = 0,
-    IpcNotReady        = 17,
-    IpcInvalidEp       = 10,
-    IpcInvalidCap      = 11,
-    IpcPermissionDenied = 12,
-    IpcUnknown         = 32,
 }
 
 fn resolve_endpoint_cap(
     task: &Task,
     cap_idx: CapIdx,
     required_rights: Rights,
-) -> Result<EndpointId, IpcSyscallRetCodes> {
+) -> Result<EndpointId, SyscallError> {
     let (handle, _) = resolve_cap(task, cap_idx as u64, KernelObjType::Endpoint, required_rights)
-        .map_err(|_| IpcSyscallRetCodes::IpcInvalidCap)?;
+        .map_err(|_| SyscallError::InvalidArgument)?;
 
     with_object(handle, |obj| {
         match &obj.data {
@@ -61,10 +36,10 @@ fn resolve_endpoint_cap(
         }
     })
     .flatten()
-    .ok_or(IpcSyscallRetCodes::IpcInvalidCap)
+    .ok_or(SyscallError::InvalidArgument)
 }
 
-pub(crate) fn handle_ipc_ep_create(curr_task_id: u32) -> i64 {
+fn handle_ipc_ep_create(curr_task_id: u32) -> Result<u64, SyscallError> {
     let ep_id = IPC_MANAGER
         .lock()
         .create_endpoint(curr_task_id)
@@ -83,21 +58,18 @@ pub(crate) fn handle_ipc_ep_create(curr_task_id: u32) -> i64 {
     let cap_idx = task.tcb.cnode.lock().alloc(cap)
         .expect("handle_ipc_ep_create: CNode full");
 
-    cap_idx as i64
+    Ok(cap_idx as u64)
 }
 
-pub(crate) fn handle_ipc_ep_destroy(
+fn handle_ipc_ep_destroy(
     curr_task_id: u32,
     cap_idx: u64,
-) -> i64 {
-    let task = match get_task_by_index(curr_task_id) {
-        Some(t) => t,
-        None => return IpcSyscallRetCodes::IpcInvalidCap as i64,
-    };
+) -> Result<u64, SyscallError> {
+    let task = get_task_by_index(curr_task_id).unwrap();
 
     let ep_id = match resolve_endpoint_cap(&task, cap_idx as CapIdx, Rights::ALL) {
         Ok(id) => id,
-        Err(e) => return e as i64   ,
+        Err(e) => return Err(e),
     };
 
     let handle = {
@@ -111,21 +83,18 @@ pub(crate) fn handle_ipc_ep_destroy(
 
     with_object(handle, |obj| obj.dec_ref());
 
-    IpcSyscallRetCodes::IpcOk as i64
+    Ok(0)
 }
 
-pub(crate) fn handle_ipc_send(
+fn handle_ipc_send(
     curr_task_id: u32,
     ipc: &IpcSyscallArguments,
-) -> i64 {
-    let task = match get_task_by_index(curr_task_id) {
-        Some(t) => t,
-        None => return IpcSyscallRetCodes::IpcInvalidCap as i64,
-    };
+) -> Result<u64, SyscallError> {
+    let task = get_task_by_index(curr_task_id).unwrap();
 
     let ep_id = match resolve_endpoint_cap(&task, ipc.ep_id as CapIdx, Rights::WRITE) {
         Ok(id) => id,
-        Err(e) => return e as i64,
+        Err(e) => return Err(e),
     };
 
     let msg = FastMessage::with_data(MsgLabel::NOTIFY, ipc.msg);
@@ -136,28 +105,25 @@ pub(crate) fn handle_ipc_send(
             if let Some(task) = get_task_by_index(receiver) {
                 awaken_task(task);
             }
-            IpcSyscallRetCodes::IpcOk as i64
+            Ok(0)
         }
-        IpcResult::NotReady => IpcSyscallRetCodes::IpcNotReady as i64,
-        IpcResult::Error(IpcError::InvalidEndpoint) => IpcSyscallRetCodes::IpcInvalidEp as i64,
-        IpcResult::Error(_) => IpcSyscallRetCodes::IpcUnknown as i64,
-        _ => IpcSyscallRetCodes::IpcOk as i64,
+        IpcResult::NotReady => Err(SyscallError::NotFound),
+        IpcResult::Error(IpcError::InvalidEndpoint) => Err(SyscallError::InvalidArgument),
+        IpcResult::Error(_) => Err(SyscallError::InvalidArgument),
+        _ => Ok(0),
     }
 }
 
-pub(crate) fn handle_ipc_recv(
+fn handle_ipc_recv(
     curr_task_id: u32,
     cap_idx_raw: u64,
     curr_task_regs: &mut TaskRegisters,
-) -> i64 {
-    let task = match get_task_by_index(curr_task_id) {
-        Some(t) => t,
-        None => return IpcSyscallRetCodes::IpcInvalidCap as i64,
-    };
+) -> Result<u64, SyscallError> {
+    let task = get_task_by_index(curr_task_id).unwrap();
 
     let ep_id = match resolve_endpoint_cap(&task, cap_idx_raw as CapIdx, Rights::READ) {
         Ok(id) => id,
-        Err(e) => return e as i64,
+        Err(e) => return Err(e),
     };
 
     let result = IPC_MANAGER.lock().handle_recv(curr_task_id, ep_id);
@@ -172,31 +138,28 @@ pub(crate) fn handle_ipc_recv(
                 curr_task_regs.r10 = msg.data[2];
                 curr_task_regs.r8  = msg.data[3];
             }
-            IpcSyscallRetCodes::IpcOk as i64
+            Ok(0)
         }
-        IpcResult::Error(_) => IpcSyscallRetCodes::IpcUnknown as i64,
-        _ => IpcSyscallRetCodes::IpcOk as i64,
+        IpcResult::Error(_) => Err(SyscallError::NotFound),
+        _ => Ok(0),
     }
 }
 
-pub(crate) fn handle_ipc_call(
+fn handle_ipc_call(
     curr_task_id: u32,
     ipc: &IpcSyscallArguments,
     curr_task_regs: &mut TaskRegisters,
-) -> i64 {
-    let task = match get_task_by_index(curr_task_id) {
-        Some(t) => t,
-        None => return IpcSyscallRetCodes::IpcInvalidCap as i64,
-    };
+) -> Result<u64, SyscallError> {
+    let task = get_task_by_index(curr_task_id).unwrap();
 
     let server_ep = match resolve_endpoint_cap(&task, ipc.ep_id as CapIdx, Rights::WRITE) {
         Ok(id) => id,
-        Err(e) => return e as i64,
+        Err(e) => return Err(e),
     };
 
     let reply_ep = match resolve_endpoint_cap(&task, ipc.msg[0] as CapIdx, Rights::READ) {
         Ok(id) => id,
-        Err(e) => return e as i64,
+        Err(e) => return Err(e),
     };
 
     let msg_data = [ipc.msg[1], ipc.msg[2], ipc.msg[3], 0];
@@ -209,9 +172,9 @@ pub(crate) fn handle_ipc_call(
                 awaken_task(task);
             }
         }
-        IpcResult::NotReady => return IpcSyscallRetCodes::IpcNotReady as i64,
-        IpcResult::Error(IpcError::InvalidEndpoint) => return IpcSyscallRetCodes::IpcInvalidEp as i64,
-        IpcResult::Error(_) => return IpcSyscallRetCodes::IpcUnknown as i64,
+        IpcResult::NotReady => return Err(SyscallError::NotFound),
+        IpcResult::Error(IpcError::InvalidEndpoint) => return Err(SyscallError::InvalidArgument),
+        IpcResult::Error(_) => return Err(SyscallError::NotFound),
         _ => {}
     }
 
@@ -226,25 +189,22 @@ pub(crate) fn handle_ipc_call(
                 curr_task_regs.r10 = msg.data[2];
                 curr_task_regs.r8  = msg.data[3];
             }
-            IpcSyscallRetCodes::IpcOk as i64
+            Ok(0)
         }
-        IpcResult::Error(_) => IpcSyscallRetCodes::IpcUnknown as i64, 
-        _ => IpcSyscallRetCodes::IpcOk as i64,
+        IpcResult::Error(_) => Err(SyscallError::NotFound), 
+        _ => Ok(0)
     }
 }
 
-pub(crate) fn handle_ipc_reply(
+fn handle_ipc_reply(
     curr_task_id: u32,
     ipc: &IpcSyscallArguments,
-) -> i64 {
-    let task = match get_task_by_index(curr_task_id) {
-        Some(t) => t,
-        None => return IpcSyscallRetCodes::IpcInvalidCap as i64,
-    };
+) -> Result<u64, SyscallError> {
+    let task = get_task_by_index(curr_task_id).unwrap();
 
     let ep_id = match resolve_endpoint_cap(&task, ipc.ep_id as CapIdx, Rights::WRITE) {
         Ok(id) => id,
-        Err(e) => return e as i64,
+        Err(e) => return Err(e),
     };
 
     let msg = FastMessage::with_data(MsgLabel::REPLY_OK, ipc.msg);
@@ -255,11 +215,27 @@ pub(crate) fn handle_ipc_reply(
             if let Some(task) = get_task_by_index(receiver) {
                 awaken_task(task);
             }
-            IpcSyscallRetCodes::IpcOk as i64
+            Ok(0)
         }
-        IpcResult::NotReady => IpcSyscallRetCodes::IpcNotReady as i64,
-        IpcResult::Error(IpcError::InvalidEndpoint) => IpcSyscallRetCodes::IpcInvalidEp as i64,
-        IpcResult::Error(_) => IpcSyscallRetCodes::IpcUnknown as i64,
-        _ => IpcSyscallRetCodes::IpcOk as i64,
+        IpcResult::NotReady => Err(SyscallError::NotFound),
+        IpcResult::Error(IpcError::InvalidEndpoint) => Err(SyscallError::InvalidArgument),
+        IpcResult::Error(_) => Err(SyscallError::NotFound),
+        _ => Ok(0),
+    }
+}
+
+pub fn dispatch_ipc_syscall_group(syscall: IpcSyscallNumbers, curr_task_id: u32, args: &SyscallArguments, regs: &mut TaskRegisters) -> Result<u64, SyscallError> {
+    let ipc = IpcSyscallArguments {
+            ep_id: args.arg1,
+            msg: [args.arg2, args.arg3, args.arg4, args.arg5],
+    };
+
+    match syscall {
+        IpcSyscallNumbers::IpcCall => handle_ipc_call(curr_task_id, &ipc, regs),
+        IpcSyscallNumbers::IpcEpCreate => handle_ipc_ep_create(curr_task_id),
+        IpcSyscallNumbers::IpcEpDestroy => handle_ipc_ep_destroy(curr_task_id, args.arg1),
+        IpcSyscallNumbers::IpcRecv => handle_ipc_recv(curr_task_id, args.arg1, regs),
+        IpcSyscallNumbers::IpcReply => handle_ipc_reply(curr_task_id, &ipc),
+        IpcSyscallNumbers::IpcSend => handle_ipc_send(curr_task_id, &ipc)
     }
 }

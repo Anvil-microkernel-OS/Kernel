@@ -4,27 +4,14 @@ use alloc::sync::Arc;
 use spin::Mutex;
 use x86_64::{VirtAddr};
 
-use crate::{arch::amd64::{ipc::{cnode::CNode, message::{Capability, Rights}, object_table::{KernelObjType, KernelObject, ObjData, obj_insert, with_object}}, memory::{misc::phys_to_virt, vmm::{PAGE_SIZE, create_new_pt4_from_kernel_pt4}}, scheduler::{PerCpuSchedulerData, addr_space::AddrSpace, exec_loader::{phys_to_offset_page_table, user_task_trampoline}, stack::{DEFAULT_KERNEL_STACK_SIZE, allocate_kernel_stack}, syscall::{SyscallError, cap_check::{CapError, resolve_cap}}, task::{AtomicTaskState, Task, TaskId, TaskRegisters, TaskState, Tcb}, task_storage::{get_task_by_index, global_queue, table}}}};
+use crate::{arch::amd64::{ipc::{cnode::CNode, message::{Capability, Rights}, object_table::{KernelObjType, KernelObject, ObjData, obj_insert, with_object}}, memory::{misc::phys_to_virt, vmm::{PAGE_SIZE, create_new_pt4_from_kernel_pt4}}, scheduler::{PerCpuSchedulerData, addr_space::AddrSpace, exec_loader::{phys_to_offset_page_table, user_task_trampoline}, stack::{DEFAULT_KERNEL_STACK_SIZE, allocate_kernel_stack}, syscall::{SyscallArguments, SyscallError, cap_check::{resolve_cap}}, task::{AtomicTaskState, Task, TaskId, TaskRegisters, TaskState, Tcb}, task_storage::{get_task_by_index, global_queue, table}}}, define_syscall_group};
 
-#[repr(i64)]
-pub enum TcbSyscallNumbers {
-    TcbCreate = 0x70,
-    TcbResume = 0x71,
-    TcbSetRegs = 0x72,
-    TcbConfigure = 0x73,
-}
-
-impl TryFrom<u64> for TcbSyscallNumbers {
-    type Error = ();
-
-    fn try_from(value: u64) -> Result<Self, Self::Error> {
-        match value {
-            0x70 => Ok(TcbSyscallNumbers::TcbCreate),
-            0x71 => Ok(TcbSyscallNumbers::TcbResume),
-            0x72 => Ok(TcbSyscallNumbers::TcbSetRegs),
-            0x73 => Ok(TcbSyscallNumbers::TcbConfigure),
-            _ => Err(()),
-        }
+define_syscall_group! {
+    pub enum TcbSyscallNumbers {
+        TcbCreate = 0x70,
+        TcbResume = 0x71,
+        TcbSetRegs = 0x72,
+        TcbConfigure = 0x73,
     }
 }
 
@@ -35,19 +22,12 @@ pub struct GrRegs {
     rdi: u64
 }
 
-pub (crate) fn tcb_set_regs(cap_tcb: u64) -> i64 {
-    let curr_task_id = PerCpuSchedulerData::get().curr_task_id.id();
+fn tcb_set_regs(curr_task_id: u32, cap_tcb: u64) -> Result<u64, SyscallError> {
     let curr = get_task_by_index(curr_task_id).unwrap();
 
     let (handle_tcb, _rights) = match resolve_cap(&curr, cap_tcb, KernelObjType::Thread, Rights::ALL) {
         Ok(h) => h,
-        Err(e) => match e {
-            CapError::InvalidIdx => return SyscallError::InvalidArgument as i64,
-            CapError::WrongType => return SyscallError::InvalidArgument as i64,
-            CapError::WrongOwner => return SyscallError::PermissionDenied as i64,
-            CapError::InsufficientRights => return SyscallError::PermissionDenied as i64,
-            CapError::NotAllowed => return SyscallError::PermissionDenied as i64,
-        },
+        Err(e) => return Err(e.to_syscall_error())
     };
 
     let target_task_id_by_tcb = match with_object(handle_tcb, |obj| {
@@ -57,11 +37,11 @@ pub (crate) fn tcb_set_regs(cap_tcb: u64) -> i64 {
         }
     }).flatten() {
         Some(id) => id,
-        None => return SyscallError::InvalidArgument as i64,
+        None => return Err(SyscallError::InvalidArgument),
     };
 
     if curr_task_id == target_task_id_by_tcb {
-        return SyscallError::PermissionDenied as i64;
+        return Err(SyscallError::PermissionDenied);
     }
 
     let task = get_task_by_index(target_task_id_by_tcb).expect("Task Not found");
@@ -89,23 +69,16 @@ pub (crate) fn tcb_set_regs(cap_tcb: u64) -> i64 {
 
     unsafe { (*task.registers.get()).rsp = initial_rsp; }
 
-    0
+    Ok(0)
 }
 
 //thread state check!!!
-pub (crate) fn tcb_configure(cap_tcb: u64, cap_vspace: u64, ipc_buff_vaddr: VirtAddr, vmo_cap_idx: u64) -> i64 {
-    let curr_task_id = PerCpuSchedulerData::get().curr_task_id.id();
+fn tcb_configure(curr_task_id: u32, cap_tcb: u64, cap_vspace: u64, ipc_buff_vaddr: VirtAddr, vmo_cap_idx: u64) -> Result<u64, SyscallError> {
     let curr = get_task_by_index(curr_task_id).unwrap();
 
     let (handle_tcb, _rights) = match resolve_cap(&curr, cap_tcb, KernelObjType::Thread, Rights::ALL) {
         Ok(h) => h,
-        Err(e) => match e {
-            CapError::InvalidIdx => return SyscallError::InvalidArgument as i64,
-            CapError::WrongType => return SyscallError::InvalidArgument as i64,
-            CapError::WrongOwner => return SyscallError::PermissionDenied as i64,
-            CapError::InsufficientRights => return SyscallError::PermissionDenied as i64,
-            CapError::NotAllowed => return SyscallError::PermissionDenied as i64,
-        },
+        Err(e) => return Err(e.to_syscall_error())
     };
 
     let target_task_id_by_tcb = match with_object(handle_tcb, |obj| {
@@ -115,18 +88,12 @@ pub (crate) fn tcb_configure(cap_tcb: u64, cap_vspace: u64, ipc_buff_vaddr: Virt
         }
     }).flatten() {
         Some(id) => id,
-        None => return SyscallError::InvalidArgument as i64,
+        None => return Err(SyscallError::InvalidArgument),
     };
 
     let (handle_vspace, _rights) = match resolve_cap(&curr, cap_vspace, KernelObjType::VSpace, Rights::ALL) {
         Ok(h) => h,
-        Err(e) => match e {
-            CapError::InvalidIdx => return SyscallError::InvalidArgument as i64,
-            CapError::WrongType => return SyscallError::InvalidArgument as i64,
-            CapError::WrongOwner => return SyscallError::PermissionDenied as i64,
-            CapError::InsufficientRights => return SyscallError::PermissionDenied as i64,
-            CapError::NotAllowed => return SyscallError::PermissionDenied as i64,
-        },
+        Err(e) => return Err(e.to_syscall_error())
     };
 
     let target_task_id_by_vspace = match with_object(handle_vspace, |obj| {
@@ -136,17 +103,17 @@ pub (crate) fn tcb_configure(cap_tcb: u64, cap_vspace: u64, ipc_buff_vaddr: Virt
         }
     }).flatten() {
         Some(id) => id,
-        None => return SyscallError::InvalidArgument as i64,
+        None => return Err(SyscallError::InvalidArgument),
     };
 
     if target_task_id_by_tcb != target_task_id_by_vspace {
-        return SyscallError::InvalidArgument as i64;
+        return Err(SyscallError::InvalidArgument);
     }
 
     let target_task_id = target_task_id_by_tcb;
 
     if target_task_id == curr_task_id {
-        return SyscallError::PermissionDenied as i64;
+        return Err(SyscallError::PermissionDenied);
     }
 
     let task = get_task_by_index(target_task_id).expect("Task Not found");
@@ -155,13 +122,7 @@ pub (crate) fn tcb_configure(cap_tcb: u64, cap_vspace: u64, ipc_buff_vaddr: Virt
         &curr, vmo_cap_idx, KernelObjType::Vmo, Rights::READ
     ) {
         Ok(h)  => h,
-        Err(e) => match e {
-            CapError::InvalidIdx => return SyscallError::InvalidArgument as i64,
-            CapError::WrongType => return SyscallError::InvalidArgument as i64,
-            CapError::WrongOwner => return SyscallError::PermissionDenied as i64,
-            CapError::InsufficientRights => return SyscallError::PermissionDenied as i64,
-            CapError::NotAllowed => return SyscallError::PermissionDenied as i64,
-        },
+        Err(e) => return Err(e.to_syscall_error())
     }; 
 
     let (frames, vmo_size) = match with_object(vmo_handle, |obj| {
@@ -171,11 +132,11 @@ pub (crate) fn tcb_configure(cap_tcb: u64, cap_vspace: u64, ipc_buff_vaddr: Virt
         }
     }).flatten() {
         Some(v) => v,
-        None    => return SyscallError::NotFound as i64,
+        None    => return Err(SyscallError::NotFound),
     };
 
     if vmo_size != PAGE_SIZE {
-        return SyscallError::InvalidArgument as i64;
+        return Err(SyscallError::InvalidArgument);
     }
 
     task.tcb.ipc_buff_paddr.lock().replace(frames[0].as_u64() as usize);
@@ -183,10 +144,10 @@ pub (crate) fn tcb_configure(cap_tcb: u64, cap_vspace: u64, ipc_buff_vaddr: Virt
 
     //todo - set fault handler
 
-    0
+    Ok(0)
 }
 
-pub (crate) fn tcb_create() -> i64 {
+fn tcb_create() -> Result<u64, SyscallError> {
     static NEXT_ID: AtomicU32 = AtomicU32::new(2);
     let new_task_id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
 
@@ -258,22 +219,16 @@ pub (crate) fn tcb_create() -> i64 {
         ptr.add(2).write(slot_cnode);
     }
 
-    0
+    Ok(0)
 }
 
-pub (crate) fn tcb_resume(tcb_cap: u64) -> i64 {
+fn tcb_resume(tcb_cap: u64) -> Result<u64, SyscallError> {
     let curr_task_id = PerCpuSchedulerData::get().curr_task_id.id();
     let curr = get_task_by_index(curr_task_id).unwrap();
 
     let (handle_tcb, _rights) = match resolve_cap(&curr, tcb_cap, KernelObjType::Thread, Rights::ALL) {
         Ok(h) => h,
-        Err(e) => match e {
-            CapError::InvalidIdx => return SyscallError::InvalidArgument as i64,
-            CapError::WrongType => return SyscallError::InvalidArgument as i64,
-            CapError::WrongOwner => return SyscallError::PermissionDenied as i64,
-            CapError::InsufficientRights => return SyscallError::PermissionDenied as i64,
-            CapError::NotAllowed => return SyscallError::PermissionDenied as i64,
-        },
+        Err(e) => return Err(e.to_syscall_error())
     };
 
     let target_task_id_by_tcb = match with_object(handle_tcb, |obj| {
@@ -283,16 +238,25 @@ pub (crate) fn tcb_resume(tcb_cap: u64) -> i64 {
         }
     }).flatten() {
         Some(id) => id,
-        None => return SyscallError::InvalidArgument as i64,
+        None => return Err(SyscallError::InvalidArgument),
     };
 
     if curr_task_id == target_task_id_by_tcb {
-        return SyscallError::PermissionDenied as i64;
+        return Err(SyscallError::PermissionDenied);
     }
 
     let task = get_task_by_index(target_task_id_by_tcb).expect("Task Not found");
     task.tcb.task_state.store(TaskState::Ready, Ordering::Release);
     global_queue().push(task);
 
-    0
+    Ok(0)
+}
+
+pub fn dispatch_tcb_syscall_group(syscall: TcbSyscallNumbers, curr_task_id: u32, args: &SyscallArguments) -> Result<u64, SyscallError> {
+    match syscall {
+        TcbSyscallNumbers::TcbConfigure => tcb_configure(curr_task_id, args.arg1, args.arg2, VirtAddr::new(args.arg3), args.arg4),
+        TcbSyscallNumbers::TcbCreate => tcb_create(),
+        TcbSyscallNumbers::TcbResume => tcb_resume(args.arg1),
+        TcbSyscallNumbers::TcbSetRegs => tcb_set_regs(curr_task_id, args.arg1)
+    }
 }

@@ -1,4 +1,4 @@
-use crate::arch::amd64::{ipc::{message::{Capability, Rights}, object_table::{HandleRef, KernelObjType, with_object}}, scheduler::task::Task};
+use crate::arch::amd64::{ipc::{message::{Rights}, object_table::{HandleRef, KernelObjType, with_object}}, scheduler::{syscall::SyscallError, task::Task}};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CapError {
@@ -9,6 +9,17 @@ pub enum CapError {
     NotAllowed
 }
 
+impl CapError {
+    pub fn to_syscall_error(&self) -> SyscallError {
+        match self {
+                CapError::InvalidIdx => SyscallError::InvalidArgument,
+                CapError::WrongType => SyscallError::InvalidArgument,
+                CapError::WrongOwner => SyscallError::PermissionDenied,
+                CapError::InsufficientRights => SyscallError::PermissionDenied,
+                CapError::NotAllowed => SyscallError::PermissionDenied
+        }
+    }
+}
 
 pub enum ExpectedOwner {
     CurrentTask,

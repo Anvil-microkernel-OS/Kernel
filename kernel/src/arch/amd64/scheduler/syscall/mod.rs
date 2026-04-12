@@ -3,7 +3,7 @@ use core::arch::naked_asm;
 use spin::Mutex;
 use x86_64::{VirtAddr, registers::{control::{Efer, EferFlags}, model_specific::{LStar, SFMask}, rflags::RFlags}};
 
-use crate::{arch::amd64::{gdt::{USER_CODE_SELECTOR, USER_DATA_SELECTOR}, scheduler::{PerCpuSchedulerData, syscall::{cap_handler::{CapSyscallNumbers, cap_copy}, ipc_handlers::{IpcSyscallNumbers, handle_ipc_call, handle_ipc_ep_create, handle_ipc_ep_destroy, handle_ipc_recv, handle_ipc_reply, handle_ipc_send}, memory_handler::{MemorySyscallNumbers, mprotect, vma_map, vma_unmap, vmo_create}, tcb::{TcbSyscallNumbers, tcb_configure, tcb_create, tcb_resume, tcb_set_regs}, thread_handler::{ThreadSyscallNums, thread_exit, thread_sleep}}, task::TaskRegisters}}, define_per_cpu_u64, early_print, early_println};
+use crate::{arch::amd64::{gdt::{USER_CODE_SELECTOR, USER_DATA_SELECTOR}, scheduler::{PerCpuSchedulerData, syscall::{cap_handler::CapSyscallNumbers, ipc_handlers::IpcSyscallNumbers, memory_handler::MemorySyscallNumbers, tcb::TcbSyscallNumbers, thread_handler::ThreadSyscallNums}, task::TaskRegisters}}, define_per_cpu_u64, early_print, early_println, register_syscall_groups};
 
 mod ipc_handlers;
 mod memory_handler;
@@ -11,6 +11,13 @@ mod thread_handler;
 mod cap_check;
 mod tcb;
 mod cap_handler;
+mod syscall_groups;
+
+use cap_handler::_SYSCALL_GROUP as CAP_SYSCALL_GROUP;
+use ipc_handlers::_SYSCALL_GROUP as IPC_SYSCALL_GROUP;
+use memory_handler::_SYSCALL_GROUP as MEMORY_SYSCALL_GROUP;
+use tcb::_SYSCALL_GROUP as TCB_SYSCALL_GROUP;
+use thread_handler::_SYSCALL_GROUP as THREAD_SYSCALL_GROUP;
 
 #[repr(i64)]
 pub (crate) enum SyscallError {
@@ -39,100 +46,83 @@ struct SyscallArguments {
     arg5: u64,
 }
 
+register_syscall_groups! {
+    CAP_SYSCALL_GROUP,
+    IPC_SYSCALL_GROUP,
+    MEMORY_SYSCALL_GROUP,
+    TCB_SYSCALL_GROUP,
+    THREAD_SYSCALL_GROUP,
+    &[0x10] // debug printf
+}
+
+pub trait IntoSyscallReturn {
+    fn into_syscall_return(self) -> u64;
+}
+
+impl<T: Into<u64>> IntoSyscallReturn for Result<T, SyscallError> {
+    fn into_syscall_return(self) -> u64 {
+        match self {
+            Ok(val) => val.into(),
+            Err(err) => (err as i64) as u64,
+        }
+    }
+}
+
 static LOCK: Mutex<()> = Mutex::new(());
 
-const NOT_ME_SYSCALL: i64 = i64::MAX;
-
-fn syscall_dispatcher(registers: &mut TaskRegisters, args: &SyscallArguments) -> i64 {
-    //debug
-
-    if args.syscall_number == 0x10 {
-        let _guard = LOCK.lock();
-        let ptr = args.arg1 as *const u8;
-        let len = args.arg2 as usize;
-
-        if args.arg1 < 0x1000 || args.arg1 > 0x0000_7FFF_FFFF_FFFF {
-            return 1;
-        }
-        if len > 4096 {
-            return 1;
-        }
-
-        let slice = unsafe { core::slice::from_raw_parts(ptr, len) };
-
-        for &byte in slice {
-            if byte == 0 { break; }
-            early_print!("{}", byte as char);
-        }
-        return 0;
+fn handle_debug_print(ptr: u64, len: u64) -> Result<u64, SyscallError> {
+    let _guard = LOCK.lock();
+    
+    if ptr < 0x1000 || ptr > 0x0000_7FFF_FFFF_FFFF {
+        return Err(SyscallError::InvalidArgument);
+    }
+    if len > 4096 {
+        return Err(SyscallError::InvalidArgument);
     }
 
+    let slice = unsafe { core::slice::from_raw_parts(ptr as *const u8, len as usize) };
+
+    for &byte in slice {
+        if byte == 0 { break; }
+        early_print!("{}", byte as char);
+    }
+    Ok(0)
+}
+
+fn syscall_dispatcher(registers: &mut TaskRegisters, args: &SyscallArguments) -> u64 {
     let curr_task_id = PerCpuSchedulerData::get().curr_task_id.id();
 
-    let ipc = IpcSyscallArguments {
-            ep_id: args.arg1,
-            msg: [args.arg2, args.arg3, args.arg4, args.arg5],
-    };
-
-    let memory = match MemorySyscallNumbers::try_from(args.syscall_number) {
-        Ok(MemorySyscallNumbers::VmaMap) => vma_map(args.arg1, args.arg2, args.arg3, args.arg4 as u32),
-        Ok(MemorySyscallNumbers::VmaUnmap) => vma_unmap(args.arg1, args.arg2),
-        Ok(MemorySyscallNumbers::Mprotect) => mprotect(args.arg1, args.arg2, args.arg3 as u32),
-        Ok(MemorySyscallNumbers::VmoCreate) => vmo_create(args.arg1),
-        Err(_) => NOT_ME_SYSCALL
-    };
-
-    if memory != NOT_ME_SYSCALL {
-        return memory as i64;
+    if let Ok(syscall) = MemorySyscallNumbers::try_from(args.syscall_number) {
+        return memory_handler::dispatch_memory_syscall_group(syscall, curr_task_id, args)
+            .into_syscall_return();
     }
 
-    let ipc = match IpcSyscallNumbers::try_from(args.syscall_number) {
-        Ok(IpcSyscallNumbers::IpcEpCreate) => handle_ipc_ep_create(curr_task_id),
-        Ok(IpcSyscallNumbers::IpcEpDestroy) => handle_ipc_ep_destroy(curr_task_id, args.arg1),
-        Ok(IpcSyscallNumbers::IpcSend) => handle_ipc_send(curr_task_id, &ipc),
-        Ok(IpcSyscallNumbers::IpcRecv) => handle_ipc_recv(curr_task_id, args.arg1, registers),
-        Ok(IpcSyscallNumbers::IpcCall) => handle_ipc_call(curr_task_id, &ipc, registers),
-        Ok(IpcSyscallNumbers::IpcReply) => handle_ipc_reply(curr_task_id, &ipc),
-        Err(_) => NOT_ME_SYSCALL
-    };
-
-    if ipc != NOT_ME_SYSCALL {
-        return ipc as i64;
+    if let Ok(syscall) = IpcSyscallNumbers::try_from(args.syscall_number) {
+        return ipc_handlers::dispatch_ipc_syscall_group(syscall, curr_task_id, args, registers)
+            .into_syscall_return();
     }
 
-    let thread = match ThreadSyscallNums::try_from(args.syscall_number) {
-        Ok(ThreadSyscallNums::ThreadSleep) => thread_sleep(args.arg1),
-        Ok(ThreadSyscallNums::ThreadExit) => thread_exit(curr_task_id as u64, args.arg1),
-        Err(_) => NOT_ME_SYSCALL
-    };
-
-    if thread != NOT_ME_SYSCALL {
-        return thread as i64;
+    if let Ok(syscall) = ThreadSyscallNums::try_from(args.syscall_number) {
+        return thread_handler::dispatch_thread_syscall_group(syscall, curr_task_id, args)
+            .into_syscall_return();
     }
 
-    let tcb = match TcbSyscallNumbers::try_from(args.syscall_number) {
-        Ok(TcbSyscallNumbers::TcbConfigure) => tcb_configure(args.arg1, args.arg2, VirtAddr::new(args.arg3), args.arg4),
-        Ok(TcbSyscallNumbers::TcbCreate) => tcb_create(),
-        Ok(TcbSyscallNumbers::TcbResume) => tcb_resume(args.arg1),
-        Ok(TcbSyscallNumbers::TcbSetRegs) => tcb_set_regs(args.arg1),
-        Err(_) => NOT_ME_SYSCALL
-    };
-
-    if tcb != NOT_ME_SYSCALL {
-        return tcb as i64;
+    if let Ok(syscall) = TcbSyscallNumbers::try_from(args.syscall_number) {
+        return tcb::dispatch_tcb_syscall_group(syscall, curr_task_id, args)
+            .into_syscall_return();
     }
 
-    let cap = match CapSyscallNumbers::try_from(args.syscall_number) {
-        Ok(CapSyscallNumbers::CapCopy) => cap_copy(args.arg1, args.arg2, args.arg3),
-        Err(_) => NOT_ME_SYSCALL
-    };
-
-    if cap != NOT_ME_SYSCALL {
-        return cap as i64;
+    if let Ok(syscall) = CapSyscallNumbers::try_from(args.syscall_number) {
+        return cap_handler::dispatch_cap_syscall_group(syscall, curr_task_id, args)
+            .into_syscall_return();
     }
-    
+
+    if args.syscall_number == 0x10 {
+        return handle_debug_print(args.arg1, args.arg2).into_syscall_return();
+    }
+
     early_println!("Unknown syscall: {} task={}", args.syscall_number, curr_task_id);
-    return SyscallError::InvalidHandle as i64;
+    (SyscallError::InvalidHandle as i64) as u64
 }
 
 pub fn init_syscall_subsystem() {
@@ -236,5 +226,5 @@ extern "C" fn syscall_handler_inner(registers: &mut TaskRegisters) {
         arg5: registers.r8,
     };
 
-    registers.syscall_number_or_irq_or_error_code = syscall_dispatcher(registers, &args) as u64;
+    registers.syscall_number_or_irq_or_error_code = syscall_dispatcher(registers, &args);
 }

@@ -9,14 +9,14 @@ CFLAGS = -nostdlib -nostdinc -ffreestanding -O2 \
          -Wl,-T,link.ld \
          -nodefaultlibs
 
-.INTERMEDIATE: server.elf
+.INTERMEDIATE: init.elf
 
-all: server.bin
+all: init.bin
 
-server.elf: server.c
+init.elf: server.c
 	$(CC) $(CFLAGS) -o $@ $<
 
-server.bin: server.elf
+init.bin: init.elf
 	$(OBJCOPY) -O binary $< $@
 
 clean:

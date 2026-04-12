@@ -1,31 +1,27 @@
-use crate::arch::amd64::scheduler::{sleep, task::{TaskId, TaskIdIndex}, task_storage::get_task_by_index};
+use crate::{arch::amd64::scheduler::{sleep, syscall::{SyscallArguments, SyscallError}}, define_syscall_group};
 
-#[repr(u64)]
-pub enum ThreadSyscallNums {
-    ThreadSleep = 0x99,
-    ThreadExit = 0x11
-}
-
-impl TryFrom<u64> for ThreadSyscallNums {
-    type Error = ();
-
-    fn try_from(value: u64) -> Result<Self, Self::Error> {
-        match value {
-            x if x == Self::ThreadSleep as u64 => Ok(Self::ThreadSleep),
-            x if x == Self::ThreadExit as u64 => Ok(Self::ThreadExit),
-            _ => Err(()),
-        }
+define_syscall_group! {
+    pub enum ThreadSyscallNums {
+        ThreadSleep = 0x99,
+        ThreadExit = 0x11
     }
 }
 
-pub (crate) fn thread_exit(self_id: u64, code: u64) -> ! {
+fn thread_exit(self_id: u32, code: u64) -> ! {
     //let task = get_task_by_index(self_id as TaskIdIndex).expect("Task not found");
     //drop(task.addr_space.lock());
     todo!()
 }
 
-pub (crate) fn thread_sleep(ns: u64) -> i64 {
+fn thread_sleep(ns: u64) -> Result<u64, SyscallError> {
     sleep(ns);
 
-    0
+    Ok(0)
+}
+
+pub fn dispatch_thread_syscall_group(syscall: ThreadSyscallNums, curr_task_id: u32, args: &SyscallArguments) -> Result<u64, SyscallError> {
+    match syscall {
+        ThreadSyscallNums::ThreadExit => thread_exit(curr_task_id, args.arg1),
+        ThreadSyscallNums::ThreadSleep => thread_sleep(args.arg1)
+    }
 }
