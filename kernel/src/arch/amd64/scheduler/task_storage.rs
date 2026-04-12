@@ -50,7 +50,7 @@ static TASK_TABLE:        Once<TaskTable>      = Once::new();
 static GLOBAL_RUN_QUEUE:  Once<GlobalRunQueue> = Once::new();
 
 #[inline] pub fn table() -> &'static TaskTable      { TASK_TABLE.get().expect("task table not initialized") }
-#[inline] fn global_queue() -> &'static GlobalRunQueue { GLOBAL_RUN_QUEUE.get().expect("global run queue not initialized") }
+#[inline] pub fn global_queue() -> &'static GlobalRunQueue { GLOBAL_RUN_QUEUE.get().expect("global run queue not initialized") }
 
 pub fn initialize_task_storage() {
     TASK_TABLE.call_once(TaskTable::new);

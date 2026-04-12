@@ -10,6 +10,7 @@ use crate::arch::amd64::{
     },
 };
 
+#[repr(u64)]
 pub(crate) enum IpcSyscallNumbers {
     IpcSend      = 0x60,
     IpcRecv      = 0x61,
@@ -19,6 +20,23 @@ pub(crate) enum IpcSyscallNumbers {
     IpcEpDestroy = 0x65,
 }
 
+impl TryFrom<u64> for IpcSyscallNumbers {
+    type Error = ();
+
+    fn try_from(value: u64) -> Result<Self, Self::Error> {
+        match value {
+            x if x == Self::IpcSend as u64 => Ok(Self::IpcSend),
+            x if x == Self::IpcRecv as u64 => Ok(Self::IpcRecv),
+            x if x == Self::IpcCall as u64 => Ok(Self::IpcCall),
+            x if x == Self::IpcReply as u64 => Ok(Self::IpcReply),
+            x if x == Self::IpcEpCreate as u64 => Ok(Self::IpcEpCreate),
+            x if x == Self::IpcEpDestroy as u64 => Ok(Self::IpcEpDestroy),
+            _ => Err(()),
+        }
+    }
+}
+
+#[repr(i64)]
 pub(crate) enum IpcSyscallRetCodes {
     IpcOk              = 0,
     IpcNotReady        = 17,
@@ -46,7 +64,7 @@ fn resolve_endpoint_cap(
     .ok_or(IpcSyscallRetCodes::IpcInvalidCap)
 }
 
-pub(crate) fn handle_ipc_ep_create(curr_task_id: u32) -> u64 {
+pub(crate) fn handle_ipc_ep_create(curr_task_id: u32) -> i64 {
     let ep_id = IPC_MANAGER
         .lock()
         .create_endpoint(curr_task_id)
@@ -65,21 +83,21 @@ pub(crate) fn handle_ipc_ep_create(curr_task_id: u32) -> u64 {
     let cap_idx = task.tcb.cnode.lock().alloc(cap)
         .expect("handle_ipc_ep_create: CNode full");
 
-    cap_idx as u64
+    cap_idx as i64
 }
 
 pub(crate) fn handle_ipc_ep_destroy(
     curr_task_id: u32,
     cap_idx: u64,
-) -> IpcSyscallRetCodes {
+) -> i64 {
     let task = match get_task_by_index(curr_task_id) {
         Some(t) => t,
-        None => return IpcSyscallRetCodes::IpcInvalidCap,
+        None => return IpcSyscallRetCodes::IpcInvalidCap as i64,
     };
 
     let ep_id = match resolve_endpoint_cap(&task, cap_idx as CapIdx, Rights::ALL) {
         Ok(id) => id,
-        Err(e) => return e,
+        Err(e) => return e as i64   ,
     };
 
     let handle = {
@@ -93,21 +111,21 @@ pub(crate) fn handle_ipc_ep_destroy(
 
     with_object(handle, |obj| obj.dec_ref());
 
-    IpcSyscallRetCodes::IpcOk
+    IpcSyscallRetCodes::IpcOk as i64
 }
 
 pub(crate) fn handle_ipc_send(
     curr_task_id: u32,
     ipc: &IpcSyscallArguments,
-) -> IpcSyscallRetCodes {
+) -> i64 {
     let task = match get_task_by_index(curr_task_id) {
         Some(t) => t,
-        None => return IpcSyscallRetCodes::IpcInvalidCap,
+        None => return IpcSyscallRetCodes::IpcInvalidCap as i64,
     };
 
     let ep_id = match resolve_endpoint_cap(&task, ipc.ep_id as CapIdx, Rights::WRITE) {
         Ok(id) => id,
-        Err(e) => return e,
+        Err(e) => return e as i64,
     };
 
     let msg = FastMessage::with_data(MsgLabel::NOTIFY, ipc.msg);
@@ -118,12 +136,12 @@ pub(crate) fn handle_ipc_send(
             if let Some(task) = get_task_by_index(receiver) {
                 awaken_task(task);
             }
-            IpcSyscallRetCodes::IpcOk
+            IpcSyscallRetCodes::IpcOk as i64
         }
-        IpcResult::NotReady => IpcSyscallRetCodes::IpcNotReady,
-        IpcResult::Error(IpcError::InvalidEndpoint) => IpcSyscallRetCodes::IpcInvalidEp,
-        IpcResult::Error(_) => IpcSyscallRetCodes::IpcUnknown,
-        _ => IpcSyscallRetCodes::IpcOk,
+        IpcResult::NotReady => IpcSyscallRetCodes::IpcNotReady as i64,
+        IpcResult::Error(IpcError::InvalidEndpoint) => IpcSyscallRetCodes::IpcInvalidEp as i64,
+        IpcResult::Error(_) => IpcSyscallRetCodes::IpcUnknown as i64,
+        _ => IpcSyscallRetCodes::IpcOk as i64,
     }
 }
 
@@ -131,15 +149,15 @@ pub(crate) fn handle_ipc_recv(
     curr_task_id: u32,
     cap_idx_raw: u64,
     curr_task_regs: &mut TaskRegisters,
-) -> IpcSyscallRetCodes {
+) -> i64 {
     let task = match get_task_by_index(curr_task_id) {
         Some(t) => t,
-        None => return IpcSyscallRetCodes::IpcInvalidCap,
+        None => return IpcSyscallRetCodes::IpcInvalidCap as i64,
     };
 
     let ep_id = match resolve_endpoint_cap(&task, cap_idx_raw as CapIdx, Rights::READ) {
         Ok(id) => id,
-        Err(e) => return e,
+        Err(e) => return e as i64,
     };
 
     let result = IPC_MANAGER.lock().handle_recv(curr_task_id, ep_id);
@@ -154,10 +172,10 @@ pub(crate) fn handle_ipc_recv(
                 curr_task_regs.r10 = msg.data[2];
                 curr_task_regs.r8  = msg.data[3];
             }
-            IpcSyscallRetCodes::IpcOk
+            IpcSyscallRetCodes::IpcOk as i64
         }
-        IpcResult::Error(_) => IpcSyscallRetCodes::IpcUnknown,
-        _ => IpcSyscallRetCodes::IpcOk,
+        IpcResult::Error(_) => IpcSyscallRetCodes::IpcUnknown as i64,
+        _ => IpcSyscallRetCodes::IpcOk as i64,
     }
 }
 
@@ -165,20 +183,20 @@ pub(crate) fn handle_ipc_call(
     curr_task_id: u32,
     ipc: &IpcSyscallArguments,
     curr_task_regs: &mut TaskRegisters,
-) -> IpcSyscallRetCodes {
+) -> i64 {
     let task = match get_task_by_index(curr_task_id) {
         Some(t) => t,
-        None => return IpcSyscallRetCodes::IpcInvalidCap,
+        None => return IpcSyscallRetCodes::IpcInvalidCap as i64,
     };
 
     let server_ep = match resolve_endpoint_cap(&task, ipc.ep_id as CapIdx, Rights::WRITE) {
         Ok(id) => id,
-        Err(e) => return e,
+        Err(e) => return e as i64,
     };
 
     let reply_ep = match resolve_endpoint_cap(&task, ipc.msg[0] as CapIdx, Rights::READ) {
         Ok(id) => id,
-        Err(e) => return e,
+        Err(e) => return e as i64,
     };
 
     let msg_data = [ipc.msg[1], ipc.msg[2], ipc.msg[3], 0];
@@ -191,9 +209,9 @@ pub(crate) fn handle_ipc_call(
                 awaken_task(task);
             }
         }
-        IpcResult::NotReady => return IpcSyscallRetCodes::IpcNotReady,
-        IpcResult::Error(IpcError::InvalidEndpoint) => return IpcSyscallRetCodes::IpcInvalidEp,
-        IpcResult::Error(_) => return IpcSyscallRetCodes::IpcUnknown,
+        IpcResult::NotReady => return IpcSyscallRetCodes::IpcNotReady as i64,
+        IpcResult::Error(IpcError::InvalidEndpoint) => return IpcSyscallRetCodes::IpcInvalidEp as i64,
+        IpcResult::Error(_) => return IpcSyscallRetCodes::IpcUnknown as i64,
         _ => {}
     }
 
@@ -208,25 +226,25 @@ pub(crate) fn handle_ipc_call(
                 curr_task_regs.r10 = msg.data[2];
                 curr_task_regs.r8  = msg.data[3];
             }
-            IpcSyscallRetCodes::IpcOk
+            IpcSyscallRetCodes::IpcOk as i64
         }
-        IpcResult::Error(_) => IpcSyscallRetCodes::IpcUnknown,
-        _ => IpcSyscallRetCodes::IpcOk,
+        IpcResult::Error(_) => IpcSyscallRetCodes::IpcUnknown as i64, 
+        _ => IpcSyscallRetCodes::IpcOk as i64,
     }
 }
 
 pub(crate) fn handle_ipc_reply(
     curr_task_id: u32,
     ipc: &IpcSyscallArguments,
-) -> IpcSyscallRetCodes {
+) -> i64 {
     let task = match get_task_by_index(curr_task_id) {
         Some(t) => t,
-        None => return IpcSyscallRetCodes::IpcInvalidCap,
+        None => return IpcSyscallRetCodes::IpcInvalidCap as i64,
     };
 
     let ep_id = match resolve_endpoint_cap(&task, ipc.ep_id as CapIdx, Rights::WRITE) {
         Ok(id) => id,
-        Err(e) => return e,
+        Err(e) => return e as i64,
     };
 
     let msg = FastMessage::with_data(MsgLabel::REPLY_OK, ipc.msg);
@@ -237,11 +255,11 @@ pub(crate) fn handle_ipc_reply(
             if let Some(task) = get_task_by_index(receiver) {
                 awaken_task(task);
             }
-            IpcSyscallRetCodes::IpcOk
+            IpcSyscallRetCodes::IpcOk as i64
         }
-        IpcResult::NotReady => IpcSyscallRetCodes::IpcNotReady,
-        IpcResult::Error(IpcError::InvalidEndpoint) => IpcSyscallRetCodes::IpcInvalidEp,
-        IpcResult::Error(_) => IpcSyscallRetCodes::IpcUnknown,
-        _ => IpcSyscallRetCodes::IpcOk,
+        IpcResult::NotReady => IpcSyscallRetCodes::IpcNotReady as i64,
+        IpcResult::Error(IpcError::InvalidEndpoint) => IpcSyscallRetCodes::IpcInvalidEp as i64,
+        IpcResult::Error(_) => IpcSyscallRetCodes::IpcUnknown as i64,
+        _ => IpcSyscallRetCodes::IpcOk as i64,
     }
 }

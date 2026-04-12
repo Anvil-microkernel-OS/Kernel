@@ -1,7 +1,9 @@
 use core::sync::atomic::{AtomicU32, Ordering};
+use alloc::vec::Vec;
 use spin::Mutex;
+use x86_64::{PhysAddr, structures::paging::frame};
 
-use crate::arch::amd64::scheduler::task::TaskIdIndex;
+use crate::arch::amd64::{memory::pmm::pages_allocator::free_pages, scheduler::task::TaskIdIndex};
 
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -13,13 +15,28 @@ pub enum KernelObjType {
     Thread   = 3,
     Irq      = 4,
     CNode    = 5,
+    Vmo      = 6,
 }
 
 pub enum ObjData {
     VSpace(TaskIdIndex),
     Endpoint(TaskIdIndex),
     CNode(TaskIdIndex),
-    Thread(TaskIdIndex)
+    Thread(TaskIdIndex),
+    Vmo(Vmo)
+}
+
+pub struct Vmo {
+    pub frames: Vec<PhysAddr>,
+    pub size:   usize,
+}
+
+impl Drop for Vmo {
+    fn drop(&mut self) {
+        for frame in &self.frames {
+            free_pages(*frame);
+        }
+    }
 }
 
 pub struct KernelObject {

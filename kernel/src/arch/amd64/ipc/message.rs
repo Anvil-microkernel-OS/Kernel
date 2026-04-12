@@ -13,7 +13,8 @@ impl Rights {
     pub const WRITE: Rights = Rights(1 << 1);
     pub const EXEC:  Rights = Rights(1 << 2);
     pub const GRANT: Rights = Rights(1 << 3); 
-    pub const ALL:   Rights = Rights(0xF);
+    pub const MANAGE: Rights = Rights(1 << 4); 
+    pub const ALL:   Rights = Rights(0xFFF);
 
     pub fn contains(self, other: Rights) -> bool {
         (self.0 & other.0) == other.0

@@ -40,6 +40,8 @@ pub fn alloc_physical_frame_pfn() -> Option<Pfn> {
         .alloc_pages(ZoneId::High, 0)
 }
 
+
+
 pub fn alloc_pages_by_order(order: usize, flags: PAllocFlags) -> Option<PhysAddr> {
     let zone   = flags_to_zone(&flags);
     let zeroed = flags.contains(PAllocFlags::ZEROED);

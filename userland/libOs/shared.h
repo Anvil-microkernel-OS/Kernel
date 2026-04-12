@@ -1,14 +1,15 @@
-// syscall_client.h
 #pragma once
 typedef unsigned char __uint8_t;
 typedef unsigned short int __uint16_t;
 typedef unsigned int __uint32_t;
 typedef unsigned long int __uint64_t;
+typedef signed long int __int64_t;
 
 typedef __uint8_t uint8_t;
 typedef __uint16_t uint16_t;
 typedef __uint32_t uint32_t;
 typedef __uint64_t uint64_t;
+typedef __int64_t int64_t;
 
 
 #define SYS_IPC_EP_CREATE  0x64
@@ -19,15 +20,22 @@ typedef __uint64_t uint64_t;
 #define SYS_IPC_REPLY      0x63
 #define SYS_PRINT          0x10
 
-#define SYS_ALLOC_FRAME 0x2
-#define SYS_VMA_MAP     0x3
-#define SYS_VMA_UNMAP   0x4
-#define SYS_MPROTECT    0x5
+#define SYS_VMA_MAP     0x2
+#define SYS_VMA_UNMAP   0x3
+#define SYS_MPROTECT    0x4
+#define SYS_VMO_CREATE  0x5
 
 #define MAP_READ  (1 << 0)
 #define MAP_WRITE (1 << 1)
 #define MAP_EXEC  (1 << 2)
 #define MAP_USER  (1 << 3)
+
+#define SYS_TCB_CREATE    0x70
+#define SYS_TCB_RESUME    0x71
+#define SYS_TCB_SET_REGS  0x72
+#define SYS_TCB_CONFIGURE 0x73
+
+#define SYS_CAP_COPY 0x80
 
 #define SYS_THREAD_SLEEP 0x99
 
@@ -41,8 +49,8 @@ static inline void spin_pause(void) {
     asm volatile("pause");
 }
 
-static inline uint64_t syscall0(uint64_t number) {
-    uint64_t ret;
+static inline int64_t syscall0(uint64_t number) {
+    int64_t ret;
     __asm__ volatile (
         "syscall"
         : "=a"(ret)
@@ -53,8 +61,8 @@ static inline uint64_t syscall0(uint64_t number) {
     return ret;
 }
 
-static inline uint64_t syscall1(uint64_t number, uint64_t arg1) {
-    uint64_t ret;
+static inline int64_t syscall1(uint64_t number, uint64_t arg1) {
+    int64_t ret;
     __asm__ volatile (
         "syscall"
         : "=a"(ret)
@@ -65,8 +73,8 @@ static inline uint64_t syscall1(uint64_t number, uint64_t arg1) {
     return ret;
 }
 
-static inline uint64_t syscall2(uint64_t number, uint64_t arg1, uint64_t arg2) {
-    uint64_t ret;
+static inline int64_t syscall2(uint64_t number, uint64_t arg1, uint64_t arg2) {
+    int64_t ret;
     __asm__ volatile (
         "syscall"
         : "=a"(ret)
@@ -77,8 +85,8 @@ static inline uint64_t syscall2(uint64_t number, uint64_t arg1, uint64_t arg2) {
     return ret;
 }
 
-static inline uint64_t syscall3(uint64_t number, uint64_t arg1, uint64_t arg2, uint64_t arg3) {
-    uint64_t ret;
+static inline int64_t syscall3(uint64_t number, uint64_t arg1, uint64_t arg2, uint64_t arg3) {
+    int64_t ret;
     __asm__ volatile (
         "syscall"
         : "=a"(ret)
@@ -89,9 +97,9 @@ static inline uint64_t syscall3(uint64_t number, uint64_t arg1, uint64_t arg2, u
     return ret;
 }
 
-static inline uint64_t syscall4(uint64_t number, uint64_t arg1, uint64_t arg2,
+static inline int64_t syscall4(uint64_t number, uint64_t arg1, uint64_t arg2,
                                 uint64_t arg3, uint64_t arg4) {
-    uint64_t ret;
+    int64_t ret;
     register uint64_t r10 asm("r10") = arg4;
     __asm__ volatile (
         "syscall"
@@ -103,9 +111,9 @@ static inline uint64_t syscall4(uint64_t number, uint64_t arg1, uint64_t arg2,
     return ret;
 }
 
-static inline uint64_t syscall5(uint64_t number, uint64_t arg1, uint64_t arg2,
+static inline int64_t syscall5(uint64_t number, uint64_t arg1, uint64_t arg2,
                                 uint64_t arg3, uint64_t arg4, uint64_t arg5) {
-    uint64_t ret;
+    int64_t ret;
     register uint64_t r10 asm("r10") = arg4;
     register uint64_t r8  asm("r8")  = arg5;
     __asm__ volatile (
@@ -123,8 +131,8 @@ typedef struct {
     uint64_t data[4];
 } ipc_msg_t;
 
-static inline uint64_t ipc_recv_msg(uint64_t ep_id, ipc_msg_t *out) {
-    uint64_t ret;
+static inline int64_t ipc_recv_msg(uint64_t ep_id, ipc_msg_t *out) {
+    int64_t ret;
     register uint64_t rdi asm("rdi") = ep_id;
     register uint64_t rsi asm("rsi");
     register uint64_t rdx asm("rdx");
@@ -149,59 +157,79 @@ static inline uint64_t ipc_recv_msg(uint64_t ep_id, ipc_msg_t *out) {
     return ret;
 }
 
-static inline uint64_t ipc_ep_create(void) {
+static inline int64_t ipc_ep_create(void) {
     return syscall1(SYS_IPC_EP_CREATE, 0); 
 }
 
-static inline uint64_t ipc_ep_destroy(uint64_t ep_id) {
+static inline int64_t ipc_ep_destroy(uint64_t ep_id) {
     return syscall1(SYS_IPC_EP_DESTROY, ep_id);
 }
 
-static inline uint64_t ipc_send(uint64_t ep_id, uint64_t msg0, uint64_t msg1, 
+static inline int64_t ipc_send(uint64_t ep_id, uint64_t msg0, uint64_t msg1, 
                                 uint64_t msg2, uint64_t msg3) {
     return syscall5(SYS_IPC_SEND, ep_id, msg0, msg1, msg2, msg3);
 }
 
-static inline uint64_t ipc_try_recv(uint64_t ep_id) {
+static inline int64_t ipc_try_recv(uint64_t ep_id) {
 
     uint64_t ret = syscall1(SYS_IPC_RECV, ep_id);
     
     return ret;
 }
 
-static inline uint64_t ipc_call(uint64_t ep_id, uint64_t req0, uint64_t req1,
+static inline int64_t ipc_call(uint64_t ep_id, uint64_t req0, uint64_t req1,
                                 uint64_t req2, uint64_t req3,
                                 uint64_t *resp0, uint64_t *resp1,
                                 uint64_t *resp2, uint64_t *resp3) {
     return syscall5(SYS_IPC_CALL, ep_id, req0, req1, req2, req3);
 }
 
-static inline uint64_t ipc_reply(uint64_t ep_id, uint64_t resp0, uint64_t resp1,
+static inline int64_t ipc_reply(uint64_t ep_id, uint64_t resp0, uint64_t resp1,
                                  uint64_t resp2, uint64_t resp3) {
     return syscall5(SYS_IPC_REPLY, ep_id, resp0, resp1, resp2, resp3);
 }
 
-static inline uint64_t alloc_frame() {
-    return syscall0(SYS_ALLOC_FRAME);
+static inline int64_t vma_map(uint64_t vspace_cap_idx, uint64_t vmo_cap_idx, uint64_t vaddr, uint64_t flags) {
+    return syscall4(SYS_VMA_MAP, vspace_cap_idx, vmo_cap_idx, vaddr, flags);
 }
 
-static inline uint64_t vma_map(uint64_t vspace_cap_idx, uint64_t vaddr, uint64_t size, uint64_t flags) {
-    return syscall4(SYS_VMA_MAP, vspace_cap_idx, vaddr, size, flags);
-}
-
-static inline uint64_t vma_unmap(uint64_t vspace_cap_idx, uint64_t vaddr) {
+static inline int64_t vma_unmap(uint64_t vspace_cap_idx, uint64_t vaddr) {
     return syscall2(SYS_VMA_UNMAP, vspace_cap_idx, vaddr);
 }
 
-static inline uint64_t mprotect(uint64_t vspace_cap_idx, uint64_t vaddr, uint64_t flags) {
+static inline int64_t mprotect(uint64_t vspace_cap_idx, uint64_t vaddr, uint64_t flags) {
     return syscall3(SYS_MPROTECT, vspace_cap_idx, vaddr, flags);
 }
 
-static inline uint64_t sleep(uint64_t ns) {
+static inline int64_t vmo_create(uint64_t size) {
+    return syscall1(SYS_VMO_CREATE, size);
+}
+
+static inline int64_t tcb_create() {
+    return syscall0(SYS_TCB_CREATE);
+}
+
+static inline int64_t tcb_resume(uint64_t tcb_cap) {
+    return syscall1(SYS_TCB_RESUME, tcb_cap);
+}
+
+static inline int64_t tcb_set_regs(uint64_t tcb_cap) {
+    return syscall1(SYS_TCB_SET_REGS, tcb_cap);
+}
+
+static inline int64_t tcb_configure(uint64_t tcb_cap, uint64_t vspace_cap, uint64_t ipc_buff_vaddr, uint64_t vmo_cap_idx) {
+    return syscall4(SYS_TCB_CONFIGURE, tcb_cap, vspace_cap, ipc_buff_vaddr, vmo_cap_idx);
+}
+
+static inline int64_t cap_copy(uint64_t src_cnode_cap, uint64_t dst_cnode_cap, uint64_t src_cnode_copy_idx) {
+    return syscall3(SYS_CAP_COPY, src_cnode_cap, dst_cnode_cap, src_cnode_copy_idx);
+}
+
+static inline int64_t sleep(uint64_t ns) {
     return syscall1(SYS_THREAD_SLEEP, ns);
 }
 
-static inline uint64_t sys_print(const char *str, uint64_t len) {
+static inline int64_t sys_print(const char *str, uint64_t len) {
     if ((uint64_t)str < 0x1000 || (uint64_t)str > 0x00007FFFFFFFFFFF) {
         return 1;
     }
@@ -319,4 +347,9 @@ static inline void printf(const char *fmt, ...) {
     int len = vsnprintf_simple(buf, sizeof(buf), fmt, ap);
     __builtin_va_end(ap);
     sys_print(buf, len);
+}
+
+__attribute__((noreturn))
+static inline void kill_sleep(void) {
+    for (;;) { spin_pause(); }
 }

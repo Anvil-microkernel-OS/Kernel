@@ -3,7 +3,6 @@
 #![feature(cell_leak)]
 #![feature(abi_x86_interrupt)]
 
-
 use core::ptr;
 
 use alloc::sync::Arc;
@@ -73,9 +72,8 @@ unsafe extern "C" fn kmain() -> ! {
     early_println!("Loading init service...");
 
     let init_srvs = BootInfo::get_init_srvs().expect("No init pack of services found!");
-    let cpio_ptr = ptr::addr_of!(init_srvs);
     if let Some(data) = cpio_find(init_srvs, "server.bin") {
-        let init = make_init_task(data, 1, cpio_ptr as u64).unwrap();
+        let init = make_init_task(data, 1, init_srvs).unwrap();
         add_task_to_execute(Arc::new(init));
         early_println!("Init service loaded!");
     } else {

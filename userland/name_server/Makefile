@@ -1,5 +1,5 @@
 CC = gcc
-OBJCOPY = objcopy
+
 CFLAGS = -nostdlib -nostdinc -ffreestanding -O2 \
          -fno-stack-protector -mno-red-zone \
          -fno-builtin -static \
@@ -9,15 +9,11 @@ CFLAGS = -nostdlib -nostdinc -ffreestanding -O2 \
          -Wl,-T,link.ld \
          -nodefaultlibs
 
-.INTERMEDIATE: server.elf
-
-all: server.bin
+all: server.elf
 
 server.elf: server.c
 	$(CC) $(CFLAGS) -o $@ $<
 
-server.bin: server.elf
-	$(OBJCOPY) -O binary $< $@
 
 clean:
-	rm -f *.elf *.bin
+	rm -f *.elf

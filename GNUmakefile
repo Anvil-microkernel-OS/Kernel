@@ -177,7 +177,7 @@ init_srvs:
 		echo "Building $$dir..."; \
 		$(MAKE) -C $$dir; \
 	done
-	@cd userland && find . -name "*.bin" | cpio -o -H newc > ../$(INIT_SRVS)
+	@cd userland && find . -name "*.bin" -o -name "*.elf" | cpio -o -H newc > ../$(INIT_SRVS)
 	@echo "init_srvs built: $(INIT_SRVS)"
 
 .PHONY: kernel

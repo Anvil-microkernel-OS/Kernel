@@ -1,6 +1,6 @@
 use x86_64::{VirtAddr, registers::control::Cr2};
 
-use crate::{arch::amd64::{cpu::hlt_loop, memory::{pmm::pages_allocator::{PAllocFlags, alloc_pages_by_order}, vmm::{PAGE_SIZE, map_single_page}}, scheduler::{PerCpuSchedulerData, addr_space::{MapFlags, VmaBacking}, task_storage::get_task_by_index}}, early_println, isr};
+use crate::{arch::amd64::{cpu::hlt_loop, memory::{pmm::pages_allocator::{PAllocFlags, alloc_pages_by_order}, vmm::{PAGE_SIZE, map_single_page}}, scheduler::{PerCpuSchedulerData, addr_space::{MapFlags, Vma, VmaBacking}, task_storage::get_task_by_index}}, early_println, isr};
 
 
 isr!(14, page_fault, |frame| {
@@ -50,6 +50,19 @@ isr!(14, page_fault, |frame| {
                     hlt_loop();
                     //kill_current_task();
                 }
+                VmaBacking::Allocated => {
+                    early_println!("PF: already allocated VMA not mapped at {:#x}", fault_addr.as_u64());
+                    drop(addr_space);
+                    hlt_loop();
+                    //kill_current_task();
+                },
+                VmaBacking::Vmo { .. } => {
+                    early_println!("PF: VMO-backed VMA not mapped at {:#x}", fault_addr.as_u64());
+                    drop(addr_space);
+                    hlt_loop();
+                    //kill_current_task();
+                }
+
             }
         }
         None => {

@@ -6,18 +6,9 @@ pub enum CapError {
     WrongType,
     WrongOwner,
     InsufficientRights,
+    NotAllowed
 }
 
-impl CapError {
-    pub fn as_syscall_err(self) -> u64 {
-        match self {
-            CapError::InvalidIdx         => u64::MAX,
-            CapError::WrongType          => u64::MAX - 1,
-            CapError::WrongOwner         => u64::MAX - 2,
-            CapError::InsufficientRights => u64::MAX - 3,
-        }
-    }
-}
 
 pub enum ExpectedOwner {
     CurrentTask,

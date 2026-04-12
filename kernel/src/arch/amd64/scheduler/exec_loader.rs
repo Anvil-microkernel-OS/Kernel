@@ -3,17 +3,20 @@ use core::{arch::naked_asm, cell::UnsafeCell, sync::atomic::AtomicU64};
 use spin::Mutex;
 use x86_64::{PhysAddr, VirtAddr, instructions::interrupts, registers::control::Cr3, structures::paging::{Mapper, OffsetPageTable, Page, PageTable, PageTableFlags, PhysFrame, Size4KiB}};
 
-use crate::arch::amd64::{ipc::{cnode::CNode, message::{Capability, Rights}, object_table::{KernelObjType, KernelObject, ObjData, obj_insert}}, memory::{misc::{pages_to_order, phys_to_virt}, pmm::{HHDM_OFFSET, pages_allocator::{PAllocFlags, alloc_pages_by_order}}, vmm::{KernelFrameAllocator, PAGE_SIZE, create_new_pt4_from_kernel_pt4, kernel_pt}}, scheduler::{addr_space::AddrSpace, stack::{DEFAULT_KERNEL_STACK_SIZE, allocate_kernel_stack}, task::{AtomicTaskState, Task, TaskId, TaskIdIndex, TaskRegisters, TaskState, Tcb}}};
+use crate::arch::amd64::{ipc::{self, cnode::CNode, message::{Capability, Rights}, object_table::{KernelObjType, KernelObject, ObjData, obj_insert}}, memory::{misc::{align_up, pages_to_order, phys_to_virt, virt_to_phys}, pmm::{HHDM_OFFSET, pages_allocator::{PAllocFlags, alloc_pages_by_order}}, vmm::{KernelFrameAllocator, PAGE_SIZE, create_new_pt4_from_kernel_pt4, kernel_pt}}, scheduler::{addr_space::AddrSpace, stack::{DEFAULT_KERNEL_STACK_SIZE, allocate_kernel_stack}, task::{AtomicTaskState, Task, TaskId, TaskIdIndex, TaskRegisters, TaskState, Tcb}}};
 
 const RFLAGS_WITH_IR: u64 = 0x202;
-const USER_STACK_PAGES_COUNT: usize = 4;
-const USER_STACK_TOP_VIRT_ADDR: u64 = 0x7FFF_FFFF_0000;
+pub const USER_STACK_PAGES_COUNT: usize = 4;
+pub const USER_STACK_TOP_VIRT_ADDR: u64 = 0x7FFF_FFFF_0000;
 
 pub const USER_LOAD_VADDR: u64 = 0x400000;
 pub const USER_ENTRY_VADDR: u64 = USER_LOAD_VADDR; 
 pub const BOOTINFO_VADDR: u64 = 0x1000;
+pub const IPC_BUFF_VADDR: u64 = 0x0000;
 
-fn phys_to_offset_page_table(table: PhysAddr) -> OffsetPageTable<'static> {
+pub const USER_CPIO_START_VADDR: u64 = 0x7FFF_FFFF_0000 + 0x1000 * USER_STACK_PAGES_COUNT as u64;
+
+pub fn phys_to_offset_page_table(table: PhysAddr) -> OffsetPageTable<'static> {
     let phys_offset = kernel_pt().lock().phys_offset();
     let virt = phys_offset + table.as_u64();
     let page_table_ptr = virt.as_mut_ptr::<PageTable>();
@@ -25,8 +28,9 @@ pub struct InitSvrsBootInfo {
     pub self_tcb_cap:    u64,
     pub self_vspace_cap: u64,
     pub self_cnode_cap:  u64,
-
-    cpio_base_addr: u64
+    pub ipc_buff_addr: u64,
+    pub cpio_base_addr: u64,
+    pub cpio_size: u64
 }
 
 pub fn make_init_caps(task_id: TaskIdIndex, cnode: &mut CNode) -> InitSvrsBootInfo {
@@ -57,14 +61,16 @@ pub fn make_init_caps(task_id: TaskIdIndex, cnode: &mut CNode) -> InitSvrsBootIn
         self_tcb_cap,
         self_vspace_cap,
         self_cnode_cap,
-        cpio_base_addr: 0,
+        ipc_buff_addr: IPC_BUFF_VADDR,
+        cpio_base_addr: 0, // later filled by exec_loader
+        cpio_size: 0 // later filled by exec_loader
     }
 }
 
 pub fn make_init_task(
     bytes: &[u8],
     task_id: TaskIdIndex,
-    cpio_baddr: u64
+    cpio: &[u8]
 ) -> Result<Task, &'static str> {
     let new_pml4_phys = create_new_pt4_from_kernel_pt4();
     let mut pt = phys_to_offset_page_table(new_pml4_phys);
@@ -130,13 +136,30 @@ pub fn make_init_task(
         }
     }
 
+    let cpio_phys_base = virt_to_phys(cpio.as_ptr() as usize);
+    let cpio_page_start = Page::<Size4KiB>::containing_address(VirtAddr::new(USER_CPIO_START_VADDR));
+    let cpio_page_end = Page::<Size4KiB>::containing_address(
+        VirtAddr::new(USER_CPIO_START_VADDR + align_up(cpio.len(), PAGE_SIZE) as u64 - 1)
+    );
+
+    for (i, page) in Page::range_inclusive(cpio_page_start, cpio_page_end).enumerate() {
+        let phys = PhysAddr::new(cpio_phys_base as u64 + (i * PAGE_SIZE) as u64);
+        let frame = PhysFrame::<Size4KiB>::containing_address(phys);
+        unsafe {
+            pt.map_to(page, frame, stack_flags, &mut KernelFrameAllocator)
+                .unwrap()
+                .flush();
+        }
+    }
+
     let bootinfo_phys = alloc_pages_by_order(0, PAllocFlags::KERNEL | PAllocFlags::ZEROED)
         .expect("make_init_task: bootinfo OOM");
 
     let mut cnode = CNode::new();
 
     let mut boot_info_svrs = make_init_caps(task_id, &mut cnode);
-    boot_info_svrs.cpio_base_addr = cpio_baddr;
+    boot_info_svrs.cpio_base_addr = USER_CPIO_START_VADDR;
+    boot_info_svrs.cpio_size = cpio.len() as u64;
     unsafe {
         let dst = phys_to_virt(bootinfo_phys.as_u64() as usize) as *mut InitSvrsBootInfo;
         core::ptr::write(dst, boot_info_svrs);
@@ -151,6 +174,24 @@ pub fn make_init_task(
             bootinfo_frame,
             PageTableFlags::PRESENT
                 | PageTableFlags::USER_ACCESSIBLE,
+            &mut KernelFrameAllocator,
+        )
+        .unwrap()
+        .flush();
+    }
+
+    let ipc_buff_phys = alloc_pages_by_order(0, PAllocFlags::KERNEL | PAllocFlags::ZEROED)
+        .expect("make_init_task: ipc buffer OOM");
+
+    let ipc_buff_page = Page::<Size4KiB>::containing_address(VirtAddr::new(IPC_BUFF_VADDR));
+    let ipc_buff_frame = PhysFrame::<Size4KiB>::containing_address(ipc_buff_phys);
+
+    unsafe {
+        pt.map_to(
+            ipc_buff_page,
+            ipc_buff_frame,
+            PageTableFlags::PRESENT
+                | PageTableFlags::USER_ACCESSIBLE | PageTableFlags::WRITABLE,
             &mut KernelFrameAllocator,
         )
         .unwrap()
@@ -185,13 +226,15 @@ pub fn make_init_task(
             addr_space: Mutex::new(AddrSpace::new(pt)),
             kernel_stack,
             cnode: Mutex::new(cnode),
-            task_state: AtomicTaskState::new(TaskState::Ready)
+            task_state: AtomicTaskState::new(TaskState::Ready),
+            ipc_buff_paddr: Mutex::new(Some(ipc_buff_phys.as_u64() as usize)),
+            ipc_buff_vaddr: Mutex::new(Some(ipc_buff_page.start_address())),
         },
     })
 }
 
 #[unsafe(naked)]
-unsafe extern "C" fn user_task_trampoline() {
+pub unsafe extern "C" fn user_task_trampoline() {
     naked_asm!(
         "sti",
         "pop rcx",
@@ -242,7 +285,9 @@ pub fn make_kernel_task(id: TaskId, entry_point: u64) -> Task {
             addr_space: Mutex::new(AddrSpace::new(page_table)), 
             kernel_stack, 
             cnode: Mutex::new(CNode::new()), 
-            task_state: AtomicTaskState::new(TaskState::Ready)
+            task_state: AtomicTaskState::new(TaskState::Ready),
+            ipc_buff_paddr: Mutex::new(None),
+            ipc_buff_vaddr: Mutex::new(None),
         }
     }
 }

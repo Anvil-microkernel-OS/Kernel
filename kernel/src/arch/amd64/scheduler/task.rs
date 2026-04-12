@@ -2,6 +2,7 @@ use core::{cell::UnsafeCell, sync::atomic::AtomicU64};
 
 use atomic_enum::atomic_enum;
 use spin::Mutex;
+use x86_64::VirtAddr;
 use crate::arch::amd64::{ipc::cnode::CNode, scheduler::{addr_space::AddrSpace, stack::KernelStack}};
 
 pub type TaskIdIndex = u32;
@@ -28,6 +29,7 @@ pub enum TaskState {
     Ready = 1,
     Exiting = 2,
     Sleep = 3,
+    Configuring = 4,
 }
 
 pub struct Task {
@@ -42,6 +44,9 @@ pub struct Tcb {
     pub kernel_stack: KernelStack,
     pub cnode: Mutex<CNode>,
     pub task_state: AtomicTaskState,
+
+    pub ipc_buff_paddr: Mutex<Option<usize>>,
+    pub ipc_buff_vaddr: Mutex<Option<VirtAddr>>,
 }
 
 unsafe impl Sync for Task {}

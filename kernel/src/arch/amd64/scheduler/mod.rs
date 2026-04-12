@@ -14,7 +14,7 @@ mod syscall;
 use crate::{
     arch::amd64::{
         apic::{PercpuLapic, start_timer}, gdt::set_tss_rsp0, scheduler::{cpu_local::ExecCpu, exec_loader::make_kernel_task, syscall::{init_syscall_subsystem, set_per_cpu_TOP_OF_KERNEL_STACK}, task::{Task, TaskId, TaskIdIndex, TaskState}, task_storage::{add_task_to_execute, get_task_by_index, initialize_task_storage, steal_from_global, table}}
-    }, define_per_cpu_struct, early_println, irq
+    }, define_per_cpu_struct, irq
 };
 
 static CPU_NUM: AtomicU64 = AtomicU64::new(0);
