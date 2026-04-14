@@ -12,6 +12,7 @@ mod pmm_tests;
 
 pub mod physical_alloc;
 pub mod pages_allocator;
+pub mod object_pool;
 
 pub static mut HHDM_OFFSET: usize = 0;
 
