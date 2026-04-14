@@ -1,3 +1,37 @@
-/limine
+# Build artifacts
+*.o
+*.obj
+*.so
+*.a
+*.elf
+*.bin
+*.cpio
 *.iso
 *.hdd
+*.img
+
+# Limine bootloader binaries
+/limine/
+
+# Temp files and backups
+*.swp
+*.swo
+*~
+#*#
+*.bak
+*.orig
+
+# IDE
+.idea/
+.vscode/
+*.sublime-*
+.vs/
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Build artifacts
+iso_root/
+*.log
