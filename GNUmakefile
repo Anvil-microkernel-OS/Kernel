@@ -27,7 +27,7 @@ run: run-$(KARCH)
 run-hdd: run-hdd-$(KARCH)
 
 .PHONY: run-x86_64
-run-x86_64: 
+run-x86_64:
 	qemu-system-$(KARCH) \
 		-M q35,acpi=on,hpet=on,accel=kvm \
 		-cpu host \
@@ -190,7 +190,7 @@ $(IMAGE_NAME).iso: limine/limine kernel init_srvs
 	cp -v kernel/kernel iso_root/boot/
 	cp -v $(INIT_SRVS) iso_root/boot/
 	mkdir -p iso_root/boot/limine
-	cp -v limine.conf iso_root/boot/limine/
+	cp -v boot/limine/limine.conf iso_root/boot/limine/
 	mkdir -p iso_root/EFI/BOOT
 ifeq ($(KARCH),x86_64)
 	cp -v limine/limine-bios.sys limine/limine-bios-cd.bin limine/limine-uefi-cd.bin iso_root/boot/limine/
@@ -239,7 +239,7 @@ endif
 	mformat -i $(IMAGE_NAME).hdd@@1M
 	mmd -i $(IMAGE_NAME).hdd@@1M ::/EFI ::/EFI/BOOT ::/boot ::/boot/limine
 	mcopy -i $(IMAGE_NAME).hdd@@1M kernel/bin-$(KARCH)/kernel ::/boot
-	mcopy -i $(IMAGE_NAME).hdd@@1M limine.conf ::/boot/limine
+	mcopy -i $(IMAGE_NAME).hdd@@1M boot/limine/limine.conf ::/boot/limine
 ifeq ($(KARCH),x86_64)
 	mcopy -i $(IMAGE_NAME).hdd@@1M limine/limine-bios.sys ::/boot/limine
 	mcopy -i $(IMAGE_NAME).hdd@@1M limine/BOOTX64.EFI ::/EFI/BOOT
