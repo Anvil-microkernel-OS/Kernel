@@ -33,14 +33,6 @@ static int64_t allocate_user_stack(int slave_vspace, uint64_t stack_top, uint64_
     return stack_top; 
 }
 
-void *memcpy(void *dst, const void *src, uint64_t n) {
-    uint8_t *d = (uint8_t *)dst;
-    const uint8_t *s = (const uint8_t *)src;
-    while (n--)
-        *d++ = *s++;
-    return dst;
-}
-
 __attribute__((noreturn, section(".text._start")))
 void _start(BootInfo_t* boot_info) {
     int64_t ret;
