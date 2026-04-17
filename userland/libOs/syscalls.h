@@ -1,5 +1,7 @@
 #pragma once
 
+#include "types.h"
+
 static inline int64_t syscall0(uint64_t number) {
     int64_t ret;
     __asm__ volatile (

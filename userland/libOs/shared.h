@@ -1,12 +1,13 @@
 #pragma once
 
-#include "types.h"
-#include "syscalls.h"
-#include "stdlib.h"
-#include "stdio.h"
 #include "ipc.h"
 #include "memory.h"
+#include "stdio.h"
+#include "stdlib.h"
+#include "string.h"
+#include "syscalls.h"
 #include "tcb.h"
+#include "types.h"
 
 #define SYS_CAP_COPY 0x80
 
