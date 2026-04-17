@@ -42,7 +42,9 @@ run-x86_64:
 .PHONY: run-hdd-x86_64
 run-hdd-x86_64: ovmf/ovmf-code-$(KARCH).fd ovmf/ovmf-vars-$(KARCH).fd $(IMAGE_NAME).hdd
 	qemu-system-$(KARCH) \
-		-M q35 \
+		-M q35,acpi=on,hpet=on,accel=kvm \
+		-cpu host \
+		-smp cpus=4,sockets=1,cores=4,threads=1 \
 		-drive if=pflash,unit=0,format=raw,file=ovmf/ovmf-code-$(KARCH).fd,readonly=on \
 		-drive if=pflash,unit=1,format=raw,file=ovmf/ovmf-vars-$(KARCH).fd \
 		-hda $(IMAGE_NAME).hdd \
@@ -187,7 +189,7 @@ kernel:
 $(IMAGE_NAME).iso: limine/limine kernel init_srvs
 	rm -rf iso_root
 	mkdir -p iso_root/boot
-	cp -v kernel/kernel iso_root/boot/
+	cp -v kernel/bin-$(KARCH)/kernel iso_root/boot/
 	cp -v $(INIT_SRVS) iso_root/boot/
 	mkdir -p iso_root/boot/limine
 	cp -v boot/limine/limine.conf iso_root/boot/limine/
@@ -229,7 +231,7 @@ ifeq ($(KARCH),loongarch64)
 endif
 	rm -rf iso_root
 
-$(IMAGE_NAME).hdd: limine/limine kernel
+$(IMAGE_NAME).hdd: limine/limine kernel init_srvs
 	rm -f $(IMAGE_NAME).hdd
 	dd if=/dev/zero bs=1M count=0 seek=64 of=$(IMAGE_NAME).hdd
 	sgdisk $(IMAGE_NAME).hdd -n 1:2048 -t 1:ef00
@@ -239,6 +241,7 @@ endif
 	mformat -i $(IMAGE_NAME).hdd@@1M
 	mmd -i $(IMAGE_NAME).hdd@@1M ::/EFI ::/EFI/BOOT ::/boot ::/boot/limine
 	mcopy -i $(IMAGE_NAME).hdd@@1M kernel/bin-$(KARCH)/kernel ::/boot
+	mcopy -i $(IMAGE_NAME).hdd@@1M $(INIT_SRVS) ::/boot
 	mcopy -i $(IMAGE_NAME).hdd@@1M boot/limine/limine.conf ::/boot/limine
 ifeq ($(KARCH),x86_64)
 	mcopy -i $(IMAGE_NAME).hdd@@1M limine/limine-bios.sys ::/boot/limine

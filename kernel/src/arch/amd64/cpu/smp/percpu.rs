@@ -1,9 +1,10 @@
 use core::ptr;
+use spin::Once;
 
 use alloc::vec::Vec;
 use x86_64::VirtAddr;
 
-use crate::{arch::amd64::{acpi::{get_acpi_tables, madt::MadTable}, memory::{misc::phys_to_virt, pmm::pages_allocator::{PAllocFlags, alloc_pages_by_order}, vmm::PAGE_SIZE}}, define_per_cpu_u32};
+use crate::{arch::amd64::{acpi::{get_acpi_tables, madt::MadTable}, memory::{misc::phys_to_virt, pmm::pages_allocator::{PAllocFlags, alloc_pages_by_order}, vmm::PAGE_SIZE}}};
 
 unsafe extern "C" {
     static _percpu_start: u8;
@@ -16,6 +17,7 @@ unsafe extern "C" {
 pub struct PerCpuRegion {
     pub base: VirtAddr,
 }
+
 
 pub struct PerCpuTemplate {
     pub data_size: usize,
@@ -106,7 +108,9 @@ fn alloc_percpu_region(total_size: usize) -> VirtAddr {
     VirtAddr::new(phys_to_virt(phys.as_u64() as usize) as u64)
 }
 
-pub fn init_percpu_regions() -> Vec<PerCpuRegion> {
+static PERCPU_REGIONS: Once<Vec<PerCpuRegion>> = Once::new();
+
+pub fn init_percpu_regions() {
     let cpu_count = get_acpi_tables().read().get_table::<MadTable>().expect("Unable to get cpu_count info form madt").cpus.len();
 
     let tpl = percpu_template();
@@ -123,15 +127,15 @@ pub fn init_percpu_regions() -> Vec<PerCpuRegion> {
         });
     }
 
-    regions
+    PERCPU_REGIONS.call_once(|| {
+        regions
+    });
 }
 
-define_per_cpu_u32!(CPU_ID);
-
-pub fn set_cpu_id(id: u32) {
-    set_per_cpu_CPU_ID(id);
+pub fn get_region_by_id<'a>(id: usize) -> &'a PerCpuRegion {
+    &PERCPU_REGIONS.get().expect("Percpu regions not initialized!")[id]
 }
 
-pub fn get_cpu_id_no_guard() -> u32 {
-    return get_per_cpu_no_guard_CPU_ID();
+pub fn get_percpu_regions_ammo() -> usize {
+    return PERCPU_REGIONS.get().expect("Percpu regions not initialized!").len()
 }

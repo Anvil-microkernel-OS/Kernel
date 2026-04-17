@@ -7,13 +7,11 @@ use x86_64::VirtAddr;
 use crate::{
     arch::amd64::{
         acpi::{get_acpi_tables, madt::MadTable}, apic::{ioapic::{IOAPICRedirectionTableRegister, IOApic}, lapic::{Lapic, LapicTimerDivide}}, memory::misc::phys_to_virt, ports::Port, timer::get_hpet
-    }, define_per_cpu_struct, early_print, early_println, irq
+    }, define_per_cpu_struct, early_print, irq
 };
 
 pub mod lapic;
 pub mod ioapic;
-
-static LAPIC: Once<Lapic> = Once::new();
 
 define_per_cpu_struct! {
     pub struct PercpuLapic {
@@ -25,7 +23,7 @@ const PIC_MASTER_PORT: u16 = 0x20;
 const PIC_SLAVE_PORT: u16 = 0xA0;
 const TIMER_VECTOR: u8 = 0x30;
 
-fn disable_pic() {
+pub fn disable_pic() {
     let pic1 = Port::<u8>::new(PIC_MASTER_PORT + 1);
     let pic2 = Port::<u8>::new(PIC_SLAVE_PORT + 1);
 
@@ -55,29 +53,13 @@ pub fn calibrate_lapic_timer(lapic: &Lapic) -> u32 {
     lapic_start.wrapping_sub(lapic_end)
 }
 
-pub fn init_lapic_percpu() {
+pub fn init_lapic() {
     let lapic_addr = get_acpi_tables().read().get_table::<MadTable>().unwrap().lapic_addr;
     PercpuLapic::with_guard(|plapic| {
         let lapic_virt = VirtAddr::new(phys_to_virt(lapic_addr.as_u64() as usize) as u64);
         plapic.lapic = Lapic::new(lapic_addr, lapic_virt);
         plapic.lapic.enable();
         plapic.lapic.set_task_priority(0);
-    });
-}
-
-pub fn init_bootstrap_lapic() {
-    early_println!("Disabling legacy PIC...");
-    disable_pic();
-    early_println!("Legacy PIC disabled");
-    let lapic_addr = get_acpi_tables().read().get_table::<MadTable>().unwrap().lapic_addr;
-    LAPIC.call_once(|| {
-        let lapic_virt = VirtAddr::new(phys_to_virt(lapic_addr.as_u64() as usize) as u64);
-        let lapic = Lapic::new(lapic_addr, lapic_virt);
-        early_println!("LAPIC ID: {}", lapic.id());
-        lapic.enable();
-        lapic.set_task_priority(0);
-        early_println!("Lapic enabled!");
-        lapic
     });
 }
 
@@ -119,22 +101,6 @@ pub fn install_ioapic_irq(irq_num: u8, vector_num: u8) {
         .with_destination_field(ioapic.ioapic_id().id()));
 }
 
-pub fn lapic_eoi() {
-    let gsbase: u64;
-    unsafe {
-        core::arch::asm!(
-            "rdgsbase {}", 
-            out(reg) gsbase,
-            options(nostack, nomem)
-        );
-    }
-    if gsbase != 0 {
-        PercpuLapic::with_guard(|p| p.lapic.eoi());
-    } else {
-        LAPIC.get().unwrap().eoi();
-    }
-}
-
 static KEYBOARD: Mutex<Option<Keyboard<layouts::Us104Key, ScancodeSet1>>> = Mutex::new(None);
 
 irq!(150, keyboard_irq, |stack| {
@@ -157,5 +123,5 @@ irq!(150, keyboard_irq, |stack| {
         }
     }
 
-    lapic_eoi();
+    PercpuLapic::get().lapic.eoi();
 });

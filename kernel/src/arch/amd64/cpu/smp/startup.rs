@@ -1,10 +1,9 @@
-use core::{arch::asm, sync::atomic::{AtomicU8, Ordering}};
+use core::{sync::atomic::{AtomicU8, Ordering}};
 
-use alloc::boxed::Box;
 use limine::{mp::Cpu, response::MpResponse};
-use x86_64::instructions;
+use x86_64::{VirtAddr, instructions};
 
-use crate::{arch::amd64::{apic::init_lapic_percpu, cpu::{hlt_loop, smp::percpu::{PerCpuRegion, init_percpu_regions, set_cpu_id, set_gsbase_for_percpu_region}}, gdt::setup_gdt_for_local_core, interrupts::idt::init_idt, scheduler::{global_init_scheduler, init_scheduler_percpu}}, bootinfo::BootInfo, define_per_cpu_u32, early_println, isr};
+use crate::{arch::amd64::{apic::init_lapic, cpu::smp::percpu::{PerCpuRegion, get_percpu_regions_ammo, get_region_by_id, set_gsbase_for_percpu_region}, gdt::setup_gdt_for_local_core, interrupts::idt::init_idt, scheduler::init_scheduler_percpu}, bootinfo::BootInfo, early_println};
 
 static NUM_CPUS_BOOTSTRAPPED: AtomicU8 = AtomicU8::new(0);
 
@@ -19,22 +18,7 @@ impl LimineCPU {
         entry: unsafe extern "C" fn(&Cpu) -> !,
         region: &'static PerCpuRegion,
     ) {
-        #[cfg(target_arch = "x86_64")]
-        if self.mp_response.bsp_lapic_id() == self.cpu.lapic_id {
-            return;
-        }
 
-        let ptr = region as *const PerCpuRegion as u64;
-        self.cpu.extra.store(ptr, Ordering::Release);
-
-        self.cpu.goto_address.write(entry);
-    }
-
-    pub (crate) fn bootstrap_bsp_cpu(
-        &self,
-        entry: unsafe extern "C" fn(&Cpu) -> !,
-        region: &'static PerCpuRegion
-    ) {
         let ptr = region as *const PerCpuRegion as u64;
         self.cpu.extra.store(ptr, Ordering::Release);
 
@@ -77,26 +61,22 @@ unsafe extern "C" fn start_ap(info: &Cpu) -> ! {
     let region_ptr = info.extra.load(Ordering::Acquire) as *const PerCpuRegion;
     assert!(!region_ptr.is_null());
     let local_region = unsafe { &*region_ptr };
+    
     set_gsbase_for_percpu_region(local_region.base);
-    set_cpu_id(info.lapic_id);
     setup_gdt_for_local_core();
     init_idt();
-    init_lapic_percpu();
+    init_lapic();
     NUM_CPUS_BOOTSTRAPPED.fetch_add(1, Ordering::Release);
     instructions::interrupts::enable();
     init_scheduler_percpu();
 }
 
-pub fn smp_startup() {
-    let regions = init_percpu_regions();
-    let regions: &'static [PerCpuRegion] = Box::leak(regions.into_boxed_slice());
-    early_println!("All cpus count: {}", regions.len());
-    global_init_scheduler(regions.len());
+pub fn smp_startup() -> ! {
+    early_println!("All cpus count: {}", get_percpu_regions_ammo());
 
     let mp_response = BootInfo::get()
         .get_smp_response()
         .expect("failed to get limine SMP response");
-    let bsp_lapic_id = mp_response.bsp_lapic_id();
 
     for entry in get_smp_entries() {
         let i = mp_response
@@ -105,33 +85,26 @@ pub fn smp_startup() {
             .position(|c| c.lapic_id == entry.cpu.lapic_id)
             .expect("CPU not found in mp_response");
 
-        if entry.cpu.lapic_id == bsp_lapic_id {
-            entry.bootstrap_bsp_cpu(start_ap, &regions[i]);
-        } else {
-            entry.bootstrap_cpu(start_ap, &regions[i]);
+        //allready setupped data for BSP
+        if entry.cpu.lapic_id != mp_response.bsp_lapic_id() {
+            entry.bootstrap_cpu(start_ap, &get_region_by_id(i));
         }
     }
 
     early_println!("Waiting for slave cpus...");
-    while NUM_CPUS_BOOTSTRAPPED.load(Ordering::Acquire) < (regions.len() - 1) as u8 {
+    while NUM_CPUS_BOOTSTRAPPED.load(Ordering::Acquire) < (get_percpu_regions_ammo() - 1) as u8 {
         core::hint::spin_loop();
     }
     early_println!("All slave cpus initialized!");
+
+    early_println!("Initializing bsp...");
+    //allready initialized all usefull data for BSP
+    init_scheduler_percpu();
 }
 
-pub fn init_bsp_core_smp() -> ! {
-    let mp_response = BootInfo::get()
-        .get_smp_response()
-        .expect("failed to get limine SMP response");
-
-    let bsp_lapic_id = mp_response.bsp_lapic_id();
-    let bsp_cpu = mp_response
-        .cpus()
-        .iter()
-        .find(|c| c.lapic_id == bsp_lapic_id)
-        .expect("BSP CPU not found");
-
-    unsafe {
-        start_ap(bsp_cpu);
-    }   
+pub fn early_setup_percpu_bsp(region_base: VirtAddr) {
+    instructions::interrupts::without_interrupts(|| {
+        set_gsbase_for_percpu_region(region_base);
+        setup_gdt_for_local_core();
+    });
 }

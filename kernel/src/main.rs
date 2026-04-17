@@ -66,13 +66,13 @@ unsafe extern "C" fn kmain() -> ! {
 
     early_arch_init();
 
-    early_println!("Loading init service...");
+    early_println!("Detecting init service...");
 
     let init_srvs = BootInfo::get_init_srvs().expect("No init pack of services found!");
     if let Some(data) = cpio_find(init_srvs, "init.bin") {
         let init = make_init_task(data, 1, init_srvs).unwrap();
         add_task_to_execute(Arc::new(init));
-        early_println!("Init service loaded!");
+        early_println!("Init service detected & pushed to exec!");
     } else {
         panic!("No init service found!");
     }

@@ -13,7 +13,7 @@ mod syscall;
 
 use crate::{
     arch::amd64::{
-        apic::{PercpuLapic, start_timer}, gdt::set_tss_rsp0, scheduler::{cpu_local::ExecCpu, exec_loader::make_kernel_task, syscall::{init_syscall_subsystem, set_per_cpu_TOP_OF_KERNEL_STACK}, task::{Task, TaskId, TaskIdIndex, TaskState}, task_storage::{add_task_to_execute, get_task_by_index, initialize_task_storage, steal_from_global, table}}
+        acpi::{get_acpi_tables, madt::MadTable}, apic::{PercpuLapic, start_timer}, gdt::set_tss_rsp0, scheduler::{cpu_local::ExecCpu, exec_loader::make_kernel_task, syscall::{init_syscall_subsystem, set_per_cpu_TOP_OF_KERNEL_STACK}, task::{Task, TaskId, TaskIdIndex, TaskState}, task_storage::{add_task_to_execute, get_task_by_index, initialize_task_storage, steal_from_global, table}}
     }, define_per_cpu_struct, irq
 };
 
@@ -71,6 +71,8 @@ impl CpuDescriptorStorage {
 
 static CPU_DESCRIPTORS: Once<CpuDescriptorStorage> = Once::new();
 
+pub static SCHEDULING_STARTED: Once<bool> = Once::new();
+
 define_per_cpu_struct!{
     pub(super) struct PerCpuSchedulerData {
         cpu_id: usize,
@@ -101,6 +103,8 @@ pub fn init_scheduler_percpu() -> ! {
     let idle_rsp = unsafe { (*my_desc.idle_task.registers.get()).rsp };
     let idle_cr3 = my_desc.idle_task.tcb.addr_space.lock().get_page_table_phys();
 
+    SCHEDULING_STARTED.call_once(|| true);
+
     unsafe {
         switch_to_task(
             addr_of!(dummy_rsp),
@@ -112,8 +116,9 @@ pub fn init_scheduler_percpu() -> ! {
     unreachable!();
 }
 
-pub fn global_init_scheduler(n_cpus: usize) {
-    CPU_DESCRIPTORS.call_once(|| CpuDescriptorStorage::new(n_cpus));
+pub fn global_init_scheduler() {
+    let cpu_count = get_acpi_tables().read().get_table::<MadTable>().expect("Unable to get cpu_count info form madt").cpus.len();
+    CPU_DESCRIPTORS.call_once(|| CpuDescriptorStorage::new(cpu_count));
 }  
 
 pub fn block_current_on_ipc() {
