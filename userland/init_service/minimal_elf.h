@@ -1,7 +1,7 @@
 #ifndef ELF_LOADER
 #define ELF_LOADER
 
-#include "../libOs/shared.h"
+#include "../libOs/include/shared.h"
 
 // ELF64 structures
 typedef struct {

@@ -1,8 +1,6 @@
-#pragma once
-
 #include "types.h"
 
-static inline int memcmp(const char *s1, const char *s2, size_t n) {
+int memcmp(const char *s1, const char *s2, size_t n) {
     unsigned char u1, u2;
 
     for (; n--; s1++, s2++){
@@ -17,7 +15,7 @@ static inline int memcmp(const char *s1, const char *s2, size_t n) {
     return 0;
 }
 
-static inline void* memcpy(void *restrict destination, const void *restrict source, size_t n) {
+void* memcpy(void *restrict destination, const void *restrict source, size_t n) {
     size_t *tmp_dest = (size_t *)destination;
     size_t *tmp_src = (size_t *)source;
     size_t len = n / sizeof(size_t);
@@ -40,15 +38,17 @@ static inline void* memcpy(void *restrict destination, const void *restrict sour
 	return destination;
 }
 
-static inline void* memset(void* ptr, int value, size_t num) {
+void* memset(void* ptr, int value, size_t num) {
     uint8_t* bytes = ptr;
 
     while(num--) {
         *bytes++ = (uint8_t)value;
     }
+
+    return ptr;
 }
 
-static inline void* memmove(void *dest, void *src, size_t count) {
+void* memmove(void *dest, void *src, size_t count) {
     void* ret = dest;
 
 	if (dest <= src || (char*)dest >= ((char*)src + count)) {

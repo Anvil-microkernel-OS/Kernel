@@ -1,4 +1,4 @@
-#include "../libOs/shared.h"
+#include "../libOs/include/shared.h"
 #include "cpio_parser.h"
 #include "minimal_elf.h"
 

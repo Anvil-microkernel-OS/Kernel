@@ -1,3 +1,5 @@
+include ../libOs/includeme.mk
+
 CC = gcc
 
 CFLAGS = -nostdlib -nostdinc -ffreestanding -O2 \
@@ -12,8 +14,8 @@ CFLAGS = -nostdlib -nostdinc -ffreestanding -O2 \
 all: server.elf
 
 server.elf: server.c
-	$(CC) $(CFLAGS) -o $@ $<
-
+	$(MAKE) -C ../libOs/ -f ../libOs/subproject.mk
+	$(CC) $(CFLAGS) -o $@ $< $(LIBOS_LIB)
 
 clean:
 	rm -f *.elf

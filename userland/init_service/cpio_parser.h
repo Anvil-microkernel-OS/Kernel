@@ -1,7 +1,7 @@
 #ifndef CPIO_PARSER
 #define CPIO_PARSER
 
-#include "../libOs/shared.h"
+#include "../libOs/include/shared.h"
 
 typedef struct {
     char magic[6];
