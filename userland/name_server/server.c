@@ -1,4 +1,4 @@
-#include "../libOs/shared.h"
+#include "../libOs/include/shared.h"
 
 typedef struct {
     uint64_t self_tcb_cap;

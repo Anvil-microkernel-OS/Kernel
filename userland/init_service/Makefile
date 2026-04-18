@@ -1,3 +1,6 @@
+# Include libOs definitions
+include ../libOs/includeme.mk
+
 CC = gcc
 OBJCOPY = objcopy
 CFLAGS = -nostdlib -nostdinc -ffreestanding -O2 \
@@ -14,7 +17,11 @@ CFLAGS = -nostdlib -nostdinc -ffreestanding -O2 \
 all: init.bin
 
 init.elf: server.c
-	$(CC) $(CFLAGS) -o $@ $<
+	# Make sure libOs is built
+	$(MAKE) -C ../libOs/ -f ../libOs/subproject.mk
+
+	# Finally, link libOs with server.
+	$(CC) $(CFLAGS) -o $@ $< $(LIBOS_LIB)
 
 init.bin: init.elf
 	$(OBJCOPY) -O binary $< $@
