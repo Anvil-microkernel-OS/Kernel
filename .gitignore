@@ -13,6 +13,10 @@
 # Limine bootloader binaries
 /limine/
 
+# Userland binaries
+/userland/**/*.bin
+/userland/**/*.elf
+
 # Temp files and backups
 *.swp
 *.swo
