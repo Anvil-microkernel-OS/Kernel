@@ -1,9 +1,9 @@
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use core::cell::UnsafeCell;
+use crate::arch::amd64::scheduler::task::TaskId;
 use crate::arch::amd64::{
     ipc::IpcError,
     ipc::message::FastMessage,
-    scheduler::task::TaskIdIndex,
 };
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
@@ -20,7 +20,7 @@ impl EndpointId {
 const WQ_CAP: usize = 16;
 
 struct WaitQueueInner {
-    buf:   [Option<TaskIdIndex>; WQ_CAP],
+    buf:   [Option<TaskId>; WQ_CAP],
     head:  usize,
     tail:  usize,
     count: usize,
@@ -63,7 +63,7 @@ impl WaitQueue {
         unsafe { &mut *self.inner.get() }
     }
 
-    fn enqueue(&self, id: TaskIdIndex) -> bool {
+    fn enqueue(&self, id: TaskId) -> bool {
         self.acquire();
         let ok =  {
             let q = self.inner();
@@ -80,7 +80,7 @@ impl WaitQueue {
         ok
     }
 
-    fn dequeue(&self) -> Option<TaskIdIndex> {
+    fn dequeue(&self) -> Option<TaskId> {
         self.acquire();
         let result = {
             let q = self.inner();
@@ -96,7 +96,7 @@ impl WaitQueue {
         result
     }
 
-    fn cancel(&self, id: TaskIdIndex) -> bool {
+    fn cancel(&self, id: TaskId) -> bool {
         self.acquire();
         let found = {
             let q = self.inner();
@@ -147,14 +147,14 @@ impl Endpoint {
     pub fn close(&mut self)         { self.closed = true; }
     pub fn is_closed(&self) -> bool { self.closed }
 
-    pub fn try_send(&mut self, _msg: FastMessage) -> Result<Option<TaskIdIndex>, IpcError> {
+    pub fn try_send(&mut self, _msg: FastMessage) -> Result<Option<TaskId>, IpcError> {
         if self.closed {
             return Err(IpcError::EndpointClosed);
         }
         Ok(self.recv_queue.dequeue())
     }
 
-    pub fn try_recv(&mut self, receiver_id: TaskIdIndex) -> Result<(), IpcError> {
+    pub fn try_recv(&mut self, receiver_id: TaskId) -> Result<(), IpcError> {
         if self.closed {
             return Err(IpcError::EndpointClosed);
         }
@@ -165,7 +165,7 @@ impl Endpoint {
         }
     }
 
-    pub fn cancel_recv(&mut self, id: TaskIdIndex) -> bool {
+    pub fn cancel_recv(&mut self, id: TaskId) -> bool {
         self.recv_queue.cancel(id)
     }
 

@@ -1,6 +1,7 @@
 #pragma once
 
-#include "ipc.h"
+#include "port.h"
+#include "channel.h"
 #include "memory.h"
 #include "stdio.h"
 #include "stdlib.h"
@@ -8,10 +9,12 @@
 #include "syscalls.h"
 #include "tcb.h"
 #include "types.h"
+#include "io_ports.h"
+#include "interrupts.h"
 
-#define SYS_CAP_COPY 0x80
+#define SYS_CAP_COPY 11
 
-#define SYS_THREAD_SLEEP 0x99
+#define SYS_THREAD_SLEEP 9
 
 static inline void spin_pause(void) {
     asm volatile("pause");

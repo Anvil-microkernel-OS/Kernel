@@ -1,10 +1,10 @@
 use core::sync::atomic::{AtomicU64, Ordering};
 
-use crate::arch::amd64::scheduler::task::TaskIdIndex;
+use crate::arch::amd64::scheduler::task::TaskId;
 
 pub struct Notification {
     badges: AtomicU64,
-    waiter: Option<TaskIdIndex>,
+    waiter: Option<TaskId>,
 }
 
 impl Notification {
@@ -15,13 +15,13 @@ impl Notification {
         }
     }
 
-    pub fn signal(&mut self, badge: u64) -> Option<TaskIdIndex> {
+    pub fn signal(&mut self, badge: u64) -> Option<TaskId> {
         self.badges.fetch_or(badge, Ordering::Release);
 
         self.waiter.take()
     }
 
-    pub fn wait(&mut self, thread_id: TaskIdIndex) -> Option<u64> {
+    pub fn wait(&mut self, thread_id: TaskId) -> Option<u64> {
         let badges = self.badges.swap(0, Ordering::Acquire);
         if badges != 0 {
             Some(badges)

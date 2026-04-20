@@ -8,10 +8,10 @@ use crate::{arch::amd64::{ipc::{cnode::CNode, message::{Capability, Rights}, obj
 
 define_syscall_group! {
     pub enum TcbSyscallNumbers {
-        TcbCreate = 0x70,
-        TcbResume = 0x71,
-        TcbSetRegs = 0x72,
-        TcbConfigure = 0x73,
+        TcbCreate = 1,
+        TcbResume = 2,
+        TcbSetRegs = 3,
+        TcbConfigure = 4,
     }
 }
 
@@ -155,7 +155,7 @@ fn tcb_create() -> Result<u64, SyscallError> {
     let pt = phys_to_offset_page_table(new_pml4_phys);
 
     let task_def = Task {
-        id: TaskId::new(new_task_id),
+        id: new_task_id,
         registers: UnsafeCell::new(TaskRegisters::default()),
         tcb: Tcb {
             wake_at_tick:  Mutex::new(AtomicU64::new(0)),
@@ -165,6 +165,8 @@ fn tcb_create() -> Result<u64, SyscallError> {
             task_state:    AtomicTaskState::new(TaskState::Configuring),
             ipc_buff_paddr: Mutex::new(None),
             ipc_buff_vaddr: Mutex::new(None),
+            iopb_permissons: Mutex::new(None),
+            iopb_gen: AtomicU64::new(0)
         }
     };
 
@@ -172,26 +174,26 @@ fn tcb_create() -> Result<u64, SyscallError> {
 
     let handle_tcb = obj_insert(KernelObject::new(
         KernelObjType::Thread,
-        ObjData::Thread(task_arc.id.id()),
+        ObjData::Thread(task_arc.id),
     )).expect("Can not create handle");
 
     let cap_tcb = Capability::new(handle_tcb, Rights::ALL);
 
     let handle_vspace = obj_insert(KernelObject::new(
         KernelObjType::VSpace,
-        ObjData::VSpace(task_arc.id.id()),
+        ObjData::VSpace(task_arc.id),
     )).expect("Can not create handle");
 
     let cap_vspace = Capability::new(handle_vspace, Rights::ALL);
 
     let handle_cnode = obj_insert(KernelObject::new(
         KernelObjType::CNode,
-        ObjData::CNode(task_arc.id.id()),
+        ObjData::CNode(task_arc.id),
     )).expect("Can not create handle");
 
     let cap_cnode = Capability::new(handle_cnode, Rights::ALL);
 
-    let curr_task_id = PerCpuSchedulerData::get().curr_task_id.id();
+    let curr_task_id = PerCpuSchedulerData::get().curr_task_id;
     let curr = get_task_by_index(curr_task_id).unwrap();
 
     table().insert(task_arc);
@@ -223,7 +225,7 @@ fn tcb_create() -> Result<u64, SyscallError> {
 }
 
 fn tcb_resume(tcb_cap: u64) -> Result<u64, SyscallError> {
-    let curr_task_id = PerCpuSchedulerData::get().curr_task_id.id();
+    let curr_task_id = PerCpuSchedulerData::get().curr_task_id;
     let curr = get_task_by_index(curr_task_id).unwrap();
 
     let (handle_tcb, _rights) = match resolve_cap(&curr, tcb_cap, KernelObjType::Thread, Rights::ALL) {

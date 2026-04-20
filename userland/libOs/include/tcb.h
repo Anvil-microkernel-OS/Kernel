@@ -3,10 +3,10 @@
 #include "syscalls.h"
 #include "types.h"
 
-#define SYS_TCB_CREATE    0x70
-#define SYS_TCB_RESUME    0x71
-#define SYS_TCB_SET_REGS  0x72
-#define SYS_TCB_CONFIGURE 0x73
+#define SYS_TCB_CREATE    1
+#define SYS_TCB_RESUME    2
+#define SYS_TCB_SET_REGS  3
+#define SYS_TCB_CONFIGURE 4
 
 static inline int64_t tcb_create() {
     return syscall0(SYS_TCB_CREATE);

@@ -22,3 +22,9 @@ typedef __int64_t int64_t;
 
 typedef __SIZE_TYPE__ size_t;
 typedef int64_t ssize_t;
+
+#define NULL ((void*)0)
+
+#define bool _Bool
+#define true 1
+#define false 0

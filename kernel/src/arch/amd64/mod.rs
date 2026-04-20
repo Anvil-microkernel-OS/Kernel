@@ -1,6 +1,6 @@
 use x86_64::{VirtAddr, instructions};
 
-use crate::{arch::amd64::{acpi::{get_acpi_tables, init_acpi, madt::MadTable}, apic::{init_ioapic, init_lapic}, cpu::{cpuid::get_cpuid_full, smp::{percpu::{get_region_by_id, init_percpu_regions}, startup::{early_setup_percpu_bsp, smp_startup}}}, gdt::init_bootstrap_gdt, interrupts::idt::init_idt, memory::{MemoryInitInfo, init_memory_subsys}, scheduler::global_init_scheduler, timer::initialize_hpet}, bootinfo::BootInfo, early_println};
+use crate::{arch::amd64::{acpi::{get_acpi_tables, init_acpi, madt::MadTable}, apic::{init_ioapic, init_lapic}, cpu::{cpuid::get_cpuid_full, smp::{percpu::{get_region_by_id, init_percpu_regions}, startup::{early_setup_percpu_bsp, smp_startup}}}, gdt::init_bootstrap_gdt, interrupts::idt::init_idt, memory::{MemoryInitInfo, init_memory_subsys, u_k_boundary::uaccsess::enable_smep}, scheduler::global_init_scheduler, timer::initialize_hpet}, bootinfo::BootInfo, early_println};
 
 pub mod serial;
 pub mod cpu;
@@ -64,6 +64,12 @@ fn early_startup() {
     early_println!("Prepare scheduler...");
     global_init_scheduler();
     early_println!("Scheduler prepared!");
+
+    if !enable_smep() {
+        early_println!("SMEP NOT DETECTED :(");
+    } else {
+        early_println!("SMEP enabled!");
+    }
 
     instructions::interrupts::enable();
 }

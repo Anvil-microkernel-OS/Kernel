@@ -3,18 +3,18 @@ use core::{arch::naked_asm, cell::UnsafeCell, sync::atomic::AtomicU64};
 use spin::Mutex;
 use x86_64::{PhysAddr, VirtAddr, instructions::interrupts, registers::control::Cr3, structures::paging::{Mapper, OffsetPageTable, Page, PageTable, PageTableFlags, PhysFrame, Size4KiB}};
 
-use crate::arch::amd64::{ipc::{self, cnode::CNode, message::{Capability, Rights}, object_table::{KernelObjType, KernelObject, ObjData, obj_insert}}, memory::{misc::{align_up, pages_to_order, phys_to_virt, virt_to_phys}, pmm::{HHDM_OFFSET, pages_allocator::{PAllocFlags, alloc_pages_by_order}}, vmm::{KernelFrameAllocator, PAGE_SIZE, create_new_pt4_from_kernel_pt4, kernel_pt}}, scheduler::{addr_space::AddrSpace, stack::{DEFAULT_KERNEL_STACK_SIZE, allocate_kernel_stack}, task::{AtomicTaskState, Task, TaskId, TaskIdIndex, TaskRegisters, TaskState, Tcb}}};
+use crate::arch::amd64::{ipc::{cnode::CNode, message::{Capability, Rights}, object_table::{KernelObjType, KernelObject, ObjData, obj_insert}}, memory::{misc::{align_up, pages_to_order, phys_to_virt, virt_to_phys}, pmm::{HHDM_OFFSET, pages_allocator::{PAllocFlags, alloc_pages_by_order}}, vmm::{KernelFrameAllocator, PAGE_SIZE, create_new_pt4_from_kernel_pt4, kernel_pt}}, scheduler::{addr_space::AddrSpace, stack::{DEFAULT_KERNEL_STACK_SIZE, allocate_kernel_stack}, task::{AtomicTaskState, Task, TaskId, TaskRegisters, TaskState, Tcb}}};
 
 const RFLAGS_WITH_IR: u64 = 0x202;
 pub const USER_STACK_PAGES_COUNT: usize = 4;
 pub const USER_STACK_TOP_VIRT_ADDR: u64 = 0x7FFF_FFFF_0000;
 
-pub const USER_LOAD_VADDR: u64 = 0x400000;
+pub const USER_LOAD_VADDR: u64 = 0x0040_0000;
 pub const USER_ENTRY_VADDR: u64 = USER_LOAD_VADDR; 
-pub const BOOTINFO_VADDR: u64 = 0x1000;
+pub const BOOTINFO_VADDR: u64 = 0x0000_0001_0000;
 pub const IPC_BUFF_VADDR: u64 = 0x0000;
 
-pub const USER_CPIO_START_VADDR: u64 = 0x7FFF_FFFF_0000 + 0x1000 * USER_STACK_PAGES_COUNT as u64;
+pub const USER_CPIO_START_VADDR: u64 = 0x7FFF_F000_0000;
 
 pub fn phys_to_offset_page_table(table: PhysAddr) -> OffsetPageTable<'static> {
     let phys_offset = kernel_pt().lock().phys_offset();
@@ -33,7 +33,7 @@ pub struct InitSvrsBootInfo {
     pub cpio_size: u64
 }
 
-pub fn make_init_caps(task_id: TaskIdIndex, cnode: &mut CNode) -> InitSvrsBootInfo {
+pub fn make_init_caps(task_id: TaskId, cnode: &mut CNode) -> InitSvrsBootInfo {
     let tcb_handle = obj_insert(KernelObject::new(
         KernelObjType::Thread,
         ObjData::Thread(task_id),
@@ -69,7 +69,7 @@ pub fn make_init_caps(task_id: TaskIdIndex, cnode: &mut CNode) -> InitSvrsBootIn
 
 pub fn make_init_task(
     bytes: &[u8],
-    task_id: TaskIdIndex,
+    task_id: TaskId,
     cpio: &[u8]
 ) -> Result<Task, &'static str> {
     let new_pml4_phys = create_new_pt4_from_kernel_pt4();
@@ -215,7 +215,7 @@ pub fn make_init_task(
     let initial_rsp = unsafe { stack_top_ptr.sub(18) } as u64;
 
     Ok(Task {
-        id: TaskId::new(task_id),
+        id: task_id,
         registers: UnsafeCell::new(TaskRegisters {
             rsp: initial_rsp,
             rdi: BOOTINFO_VADDR,
@@ -229,6 +229,8 @@ pub fn make_init_task(
             task_state: AtomicTaskState::new(TaskState::Ready),
             ipc_buff_paddr: Mutex::new(Some(ipc_buff_phys.as_u64() as usize)),
             ipc_buff_vaddr: Mutex::new(Some(ipc_buff_page.start_address())),
+            iopb_permissons: Mutex::new(None),
+            iopb_gen: AtomicU64::new(0)
         },
     })
 }
@@ -288,6 +290,8 @@ pub fn make_kernel_task(id: TaskId, entry_point: u64) -> Task {
             task_state: AtomicTaskState::new(TaskState::Ready),
             ipc_buff_paddr: Mutex::new(None),
             ipc_buff_vaddr: Mutex::new(None),
+            iopb_permissons: Mutex::new(None),
+            iopb_gen: AtomicU64::new(0)
         }
     }
 }

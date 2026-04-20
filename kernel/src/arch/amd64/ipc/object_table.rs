@@ -1,9 +1,9 @@
-use core::sync::atomic::{AtomicU32, Ordering};
-use alloc::vec::Vec;
-use spin::Mutex;
-use x86_64::{PhysAddr, structures::paging::frame};
+use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use alloc::{boxed::Box, sync::Arc, vec::Vec};
+use spin::{Mutex, RwLock};
+use x86_64::{PhysAddr};
 
-use crate::arch::amd64::{memory::pmm::pages_allocator::free_pages, scheduler::task::TaskIdIndex};
+use crate::arch::amd64::{ipc::{channel::ChannelHandle, port::Port}, memory::pmm::pages_allocator::free_pages, scheduler::task::TaskId};
 
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -16,18 +16,22 @@ pub enum KernelObjType {
     Irq      = 4,
     CNode    = 5,
     Vmo      = 6,
+    Channel  = 7,
+    Port = 8,
 }
 
 pub enum ObjData {
-    VSpace(TaskIdIndex),
-    Endpoint(TaskIdIndex),
-    CNode(TaskIdIndex),
-    Thread(TaskIdIndex),
-    Vmo(Vmo)
+    VSpace(TaskId),
+    Endpoint(TaskId),
+    CNode(TaskId),
+    Thread(TaskId),
+    Vmo(Vmo),
+    Channel(ChannelHandle),
+    Port(Arc<Port>)
 }
 
 pub struct Vmo {
-    pub owner_id: TaskIdIndex,
+    pub owner_id: TaskId,
     pub frames: Vec<PhysAddr>,
     pub size:   usize,
 }
@@ -64,18 +68,29 @@ impl KernelObject {
     }
 }
 
-const MAX_OBJECTS: usize = 4096;
-
-pub type ObjHandle = u32;
-
-struct Slot {
-    generation: u32, 
-    obj: Option<KernelObject>,
+pub struct Slot {
+    generation: AtomicU32,
+    occupied: AtomicBool,
+    obj: RwLock<Option<KernelObject>>,
 }
 
-pub struct ObjectTable {
-    slots: [Slot; MAX_OBJECTS],
-    free_head: usize,
+
+impl Slot {
+    const fn empty() -> Self {
+        Self {
+            generation: AtomicU32::new(0),
+            occupied: AtomicBool::new(false),
+            obj: RwLock::new(None),
+        }
+    }
+}
+
+const SLAB_SIZE: usize = 256;
+
+struct ObjectTable {
+    slabs: RwLock<Vec<Box<[Slot]>>>,
+    free_list: Mutex<Vec<u32>>,
+    total_slots: AtomicU32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -86,75 +101,120 @@ pub struct HandleRef {
 
 impl ObjectTable {
     pub const fn new() -> Self {
-        const EMPTY_SLOT: Slot = Slot { generation: 0, obj: None };
         Self {
-            slots: [EMPTY_SLOT; MAX_OBJECTS],
-            free_head: 0,
+            slabs: RwLock::new(Vec::new()),
+            free_list: Mutex::new(Vec::new()),
+            total_slots: AtomicU32::new(0),
         }
     }
 
-    pub fn insert(&mut self, obj: KernelObject) -> Result<HandleRef, ()> {
-        for i in self.free_head..MAX_OBJECTS {
-            if self.slots[i].obj.is_none() {
-                let generation = self.slots[i].generation;
-                self.slots[i].obj = Some(obj);
-                self.free_head = i + 1;
-                return Ok(HandleRef { index: i as u16, generation });
+    fn grow(&self) {
+        let slab: Vec<Slot> = (0..SLAB_SIZE).map(|_| Slot::empty()).collect();
+        let slab = slab.into_boxed_slice();
+        
+        let mut slabs = self.slabs.write();
+        let base = self.total_slots.load(Ordering::Relaxed) as usize;
+        slabs.push(slab);
+        let mut free = self.free_list.lock();
+        for i in (0..SLAB_SIZE).rev() {
+            free.push((base + i) as u32);
+        }
+        self.total_slots.fetch_add(SLAB_SIZE as u32, Ordering::Relaxed);
+    }
+
+    fn slot(&self, index: u32) -> Option<&Slot> {
+        let slabs = self.slabs.read();
+        let slab_idx = index as usize / SLAB_SIZE;
+        let slot_idx = index as usize % SLAB_SIZE;
+
+        unsafe {
+            slabs.get(slab_idx).map(|slab| {
+                &*(&slab[slot_idx] as *const Slot)
+            })
+        }
+    }
+
+    pub fn insert(&self, obj: KernelObject) -> Result<HandleRef, ()> {
+        let index = {
+            let mut free = self.free_list.lock();
+            if free.is_empty() {
+                drop(free);
+                self.grow();
+                self.free_list.lock().pop()
+            } else {
+                free.pop()
             }
-        }
-        Err(())
+        }.ok_or(())?;
+
+        let slot = self.slot(index).ok_or(())?;
+        let generation = slot.generation.load(Ordering::Acquire);
+        *slot.obj.write() = Some(obj);
+        slot.occupied.store(true, Ordering::Release);
+
+        Ok(HandleRef { index: index as u16, generation })
     }
 
-    pub fn get(&self, handle: HandleRef) -> Option<&KernelObject> {
-        let slot = &self.slots[handle.index as usize];
-        if slot.generation == handle.generation {
-            slot.obj.as_ref()
-        } else {
-            None
+    pub fn get<F, R>(&self, handle: HandleRef, f: F) -> Option<R>
+    where
+        F: FnOnce(&KernelObject) -> R,
+    {
+        let slot = self.slot(handle.index as u32)?;
+        if slot.generation.load(Ordering::Acquire) != handle.generation {
+            return None;
         }
+        if !slot.occupied.load(Ordering::Acquire) {
+            return None;
+        }
+        slot.obj.read().as_ref().map(f)
     }
 
-    pub fn get_mut(&mut self, handle: HandleRef) -> Option<&mut KernelObject> {
-        let slot = &mut self.slots[handle.index as usize];
-        if slot.generation == handle.generation {
-            slot.obj.as_mut()
-        } else {
-            None
+    pub fn get_mut<F, R>(&self, handle: HandleRef, f: F) -> Option<R>
+    where
+        F: FnOnce(&mut KernelObject) -> R,
+    {
+        let slot = self.slot(handle.index as u32)?;
+        if slot.generation.load(Ordering::Acquire) != handle.generation {
+            return None;
         }
+        if !slot.occupied.load(Ordering::Acquire) {
+            return None;
+        }
+        slot.obj.write().as_mut().map(f)
     }
 
-    pub fn remove(&mut self, handle: HandleRef) -> Option<KernelObject> {
-        let slot = &mut self.slots[handle.index as usize];
-        if slot.generation == handle.generation && slot.obj.is_some() {
-            slot.generation = slot.generation.wrapping_add(1); 
-            if handle.index as usize <= self.free_head {
-                self.free_head = handle.index as usize;
-            }
-            slot.obj.take()
-        } else {
-            None
+    pub fn remove(&self, handle: HandleRef) -> Option<KernelObject> {
+        let slot = self.slot(handle.index as u32)?;
+        if slot.generation.load(Ordering::Acquire) != handle.generation {
+            return None;
         }
+        let obj = slot.obj.write().take()?;
+        slot.occupied.store(false, Ordering::Release);
+        slot.generation.fetch_add(1, Ordering::Release);
+        self.free_list.lock().push(handle.index as u32);
+        Some(obj)
     }
 }
 
-static OBJECT_TABLE: Mutex<ObjectTable> = Mutex::new(ObjectTable::new());
+static OBJECT_TABLE: ObjectTable = ObjectTable::new();
 
 pub fn obj_insert(obj: KernelObject) -> Result<HandleRef, ()> {
-    OBJECT_TABLE.lock().insert(obj)
+    OBJECT_TABLE.insert(obj)
+}
+
+pub fn obj_remove(handle: HandleRef) -> Result<(), ()> {
+    OBJECT_TABLE.remove(handle).map(|_| ()).ok_or(())
 }
 
 pub fn with_object<F, R>(h: HandleRef, f: F) -> Option<R>
 where
     F: FnOnce(&KernelObject) -> R,
 {
-    let table = OBJECT_TABLE.lock();
-    table.get(h).map(f)
+    OBJECT_TABLE.get(h, f)
 }
 
 pub fn with_object_mut<F, R>(h: HandleRef, f: F) -> Option<R>
 where
     F: FnOnce(&mut KernelObject) -> R,
 {
-    let mut table = OBJECT_TABLE.lock();
-    table.get_mut(h).map(f)
+    OBJECT_TABLE.get_mut(h, f)
 }

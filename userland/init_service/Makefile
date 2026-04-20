@@ -3,7 +3,7 @@ include ../libOs/includeme.mk
 
 CC = gcc
 OBJCOPY = objcopy
-CFLAGS = -nostdlib -nostdinc -ffreestanding -O2 \
+CFLAGS = -nostdlib -nostdinc -ffreestanding -O0 -g \
          -fno-stack-protector -mno-red-zone \
          -fno-builtin -static \
          -Wl,-Ttext=0x400000 \

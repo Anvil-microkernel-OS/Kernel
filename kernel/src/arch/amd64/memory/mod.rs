@@ -3,6 +3,7 @@ use crate::{arch::amd64::memory::{mem_subsys_tests::selftest_all_memory_subsyste
 pub mod misc;
 pub mod pmm;
 pub mod vmm;
+pub mod u_k_boundary;
 mod mem_subsys_tests;
 
 pub struct MemoryInitInfo<'a> {

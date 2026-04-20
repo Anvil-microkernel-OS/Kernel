@@ -1,26 +1,13 @@
 use core::{cell::UnsafeCell, sync::atomic::AtomicU64};
 
+use alloc::boxed::Box;
 use atomic_enum::atomic_enum;
 use spin::Mutex;
 use x86_64::VirtAddr;
-use crate::arch::amd64::{ipc::cnode::CNode, scheduler::{addr_space::AddrSpace, stack::KernelStack}};
+use crate::arch::amd64::{gdt::IO_PORTS, ipc::cnode::CNode, scheduler::{addr_space::AddrSpace, stack::KernelStack}};
 
-pub type TaskIdIndex = u32;
+pub type TaskId = u32;
 
-#[derive(PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
-pub struct TaskId {
-    index: TaskIdIndex,
-}
-
-impl TaskId {
-    pub fn new(index: TaskIdIndex) -> Self {
-        Self { index }
-    }
-
-    pub fn id(&self) -> TaskIdIndex {
-        self.index
-    }
-}
 
 #[atomic_enum]
 #[repr(u8)]
@@ -47,6 +34,9 @@ pub struct Tcb {
 
     pub ipc_buff_paddr: Mutex<Option<usize>>,
     pub ipc_buff_vaddr: Mutex<Option<VirtAddr>>,
+
+    pub iopb_permissons: Mutex<Option<Box<[u8; IO_PORTS]>>>,
+    pub iopb_gen: AtomicU64,
 }
 
 unsafe impl Sync for Task {}

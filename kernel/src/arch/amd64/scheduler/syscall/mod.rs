@@ -3,21 +3,26 @@ use core::arch::naked_asm;
 use spin::Mutex;
 use x86_64::{VirtAddr, registers::{control::{Efer, EferFlags}, model_specific::{LStar, SFMask}, rflags::RFlags}};
 
-use crate::{arch::amd64::{gdt::{USER_CODE_SELECTOR, USER_DATA_SELECTOR}, scheduler::{PerCpuSchedulerData, syscall::{cap_handler::CapSyscallNumbers, ipc_handlers::IpcSyscallNumbers, memory_handler::MemorySyscallNumbers, tcb::TcbSyscallNumbers, thread_handler::ThreadSyscallNums}, task::TaskRegisters}}, define_per_cpu_u64, early_print, early_println, register_syscall_groups};
+use crate::{arch::amd64::{gdt::{USER_CODE_SELECTOR, USER_DATA_SELECTOR}, scheduler::{PerCpuSchedulerData, syscall::{cap_handler::CapSyscallNumbers, interrupts::IrqSyscallNumbers, io_ports::IoPortSyscallNumbers, memory_handler::MemorySyscallNumbers, messaging::{channel::ChannelSyscallNumbers, port::PortSyscallNumbers}, tcb::TcbSyscallNumbers, thread_handler::ThreadSyscallNums}, task::TaskRegisters}}, define_per_cpu_u64, early_print, early_println, register_syscall_groups};
 
-mod ipc_handlers;
 mod memory_handler;
 mod thread_handler;
 mod cap_check;
 mod tcb;
 mod cap_handler;
-mod syscall_groups;
+mod io_ports;
+pub mod syscall_groups;
+pub mod messaging;
+mod interrupts;
 
 use cap_handler::_SYSCALL_GROUP as CAP_SYSCALL_GROUP;
-use ipc_handlers::_SYSCALL_GROUP as IPC_SYSCALL_GROUP;
 use memory_handler::_SYSCALL_GROUP as MEMORY_SYSCALL_GROUP;
 use tcb::_SYSCALL_GROUP as TCB_SYSCALL_GROUP;
 use thread_handler::_SYSCALL_GROUP as THREAD_SYSCALL_GROUP;
+use messaging::channel::_SYSCALL_GROUP as MSG_CH_GROUP;
+use messaging::port::_SYSCALL_GROUP as MSG_PORT_GROUP;
+use io_ports::_SYSCALL_GROUP as IO_PORT_GROUP;
+use interrupts::_SYSCALL_GROUP as IRQ_GROUP;
 
 #[repr(i64)]
 pub (crate) enum SyscallError {
@@ -29,6 +34,8 @@ pub (crate) enum SyscallError {
     AlreadyExists = -6,
     NotFound = -7,
     ResourceExhausted = -8,
+    Timeout = -9,
+    Fault = -10,
 }
 
 struct IpcSyscallArguments {
@@ -47,12 +54,15 @@ struct SyscallArguments {
 }
 
 register_syscall_groups! {
-    CAP_SYSCALL_GROUP,
-    IPC_SYSCALL_GROUP,
-    MEMORY_SYSCALL_GROUP,
     TCB_SYSCALL_GROUP,
+    MEMORY_SYSCALL_GROUP,
     THREAD_SYSCALL_GROUP,
-    &[0x10] // debug printf
+    CAP_SYSCALL_GROUP,
+    MSG_CH_GROUP,
+    MSG_PORT_GROUP,
+    IO_PORT_GROUP,
+    IRQ_GROUP,
+    &[25] // debug printf
 }
 
 pub trait IntoSyscallReturn {
@@ -90,15 +100,20 @@ fn handle_debug_print(ptr: u64, len: u64) -> Result<u64, SyscallError> {
 }
 
 fn syscall_dispatcher(registers: &mut TaskRegisters, args: &SyscallArguments) -> u64 {
-    let curr_task_id = PerCpuSchedulerData::get().curr_task_id.id();
+    let curr_task_id = PerCpuSchedulerData::get().curr_task_id;
 
     if let Ok(syscall) = MemorySyscallNumbers::try_from(args.syscall_number) {
         return memory_handler::dispatch_memory_syscall_group(syscall, curr_task_id, args)
             .into_syscall_return();
     }
 
-    if let Ok(syscall) = IpcSyscallNumbers::try_from(args.syscall_number) {
-        return ipc_handlers::dispatch_ipc_syscall_group(syscall, curr_task_id, args, registers)
+    if let Ok(syscall) = PortSyscallNumbers::try_from(args.syscall_number) {
+        return messaging::port::dispatch_port_syscall_group(syscall, curr_task_id, args, registers)
+            .into_syscall_return();
+    }
+
+    if let Ok(syscall) = ChannelSyscallNumbers::try_from(args.syscall_number) {
+        return messaging::channel::dispatch_channel_syscall_group(syscall, curr_task_id, args, registers)
             .into_syscall_return();
     }
 
@@ -117,7 +132,17 @@ fn syscall_dispatcher(registers: &mut TaskRegisters, args: &SyscallArguments) ->
             .into_syscall_return();
     }
 
-    if args.syscall_number == 0x10 {
+    if let Ok(syscall) = IoPortSyscallNumbers::try_from(args.syscall_number) {
+        return io_ports::dispatch_port_syscall_group(syscall, curr_task_id, args)
+            .into_syscall_return();
+    }
+
+    if let Ok(syscall) = IrqSyscallNumbers::try_from(args.syscall_number) {
+        return interrupts::dispatch_irq_syscall_group(syscall, curr_task_id, args)
+            .into_syscall_return();
+    }
+
+    if args.syscall_number == 25 {
         return handle_debug_print(args.arg1, args.arg2).into_syscall_return();
     }
 

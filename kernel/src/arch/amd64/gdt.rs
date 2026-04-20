@@ -1,5 +1,6 @@
 use core::{mem::MaybeUninit, ptr};
 
+
 use x86_64::{
     VirtAddr, instructions::tables::load_tss, registers::{
         model_specific::Star,
@@ -9,6 +10,36 @@ use x86_64::{
         tss::TaskStateSegment,
     }
 };
+
+#[repr(C)]
+pub struct TssWithIopb {
+    pub tss: TaskStateSegment,
+    pub iopb: [u8; 8192],
+    pub terminal: u8, 
+}
+
+impl TssWithIopb {
+    pub const fn new() -> Self {
+        let tss = TaskStateSegment::new();
+        Self {
+            tss,
+            iopb: [0xFF; 8192], 
+            terminal: 0xFF,
+        }
+    }
+
+    pub fn enable_iopb(&mut self) {
+        self.tss.iomap_base = size_of::<TaskStateSegment>() as u16;
+    }
+
+    pub fn disable_iopb(&mut self) {
+        self.tss.iomap_base = u16::MAX;
+    }
+
+    pub fn copy_from(&mut self, permissions: &[u8; 8192]) {
+        self.iopb.copy_from_slice(permissions);
+    }
+}
 
 use crate::{define_per_cpu_struct};
 
@@ -70,14 +101,6 @@ fn load_gdt_and_segments(gdt: &'static GlobalDescriptorTable) {
         GS::set_reg(SegmentSelector(0));
         SS::set_reg(SegmentSelector(0));
     }
-
-    Star::write(
-        USER_CODE_SELECTOR,
-        USER_DATA_SELECTOR,
-        KERNEL_CODE_SELECTOR,
-        KERNEL_DATA_SELECTOR,
-    )
-    .unwrap_or_else(|err| panic!("Failed to set STAR: {err}"));
 }
 
 fn create_bootstrap_tss() -> TaskStateSegment {
@@ -109,7 +132,7 @@ pub fn init_bootstrap_gdt() {
 define_per_cpu_struct! {
     pub struct PercpuGdt {
         pub gdt: MaybeUninit<GlobalDescriptorTable>,
-        pub tss: MaybeUninit<TaskStateSegment>,
+        pub tss: MaybeUninit<TssWithIopb>,
         pub pgf_stack: [u8; TSS_STACK_SIZE_BYTES],
         pub df_stack: [u8; TSS_STACK_SIZE_BYTES],
         pub kernel_stack: [u8; TSS_STACK_SIZE_BYTES],
@@ -122,13 +145,52 @@ define_per_cpu_struct! {
     }
 }
 
+pub const IO_PORTS: usize = 8192;
+
 pub fn set_tss_rsp0(rsp0: VirtAddr) {
     PercpuGdt::with_guard(|local_gdt| {
         unsafe {
             let tss = &mut *local_gdt.tss.as_mut_ptr();
-            tss.privilege_stack_table[0] = rsp0;
+            tss.tss.privilege_stack_table[0] = rsp0;
         }
     });
+}
+
+pub fn set_tss_iopb_enabled(enabled: bool) {
+    PercpuGdt::with_guard(|local_gdt| {
+        unsafe {
+            let tss = &mut *local_gdt.tss.as_mut_ptr();
+            if enabled {
+                tss.enable_iopb();
+            } else {
+                tss.disable_iopb();
+            }
+        }
+    });
+}
+
+pub fn tss_copy_iopb_data(slice: &[u8; IO_PORTS]) {
+    PercpuGdt::with_guard(|local_gdt| {
+        unsafe {
+            let tss = &mut *local_gdt.tss.as_mut_ptr();
+            tss.copy_from(slice);
+        }
+    });
+}
+
+fn tss_descriptor_with_iopb(tss: &'static TaskStateSegment) -> Descriptor {
+    let ptr = tss as *const _ as u64;
+    let limit = (size_of::<TssWithIopb>() - 1) as u64; 
+    
+    let lo = limit & 0xFFFF                          
+        | (ptr & 0xFF_FFFF) << 16                   
+        | 0x0000_8900_0000_0000                      
+        | ((limit >> 16) & 0xF) << 48               
+        | (ptr >> 24 & 0xFF) << 56;                  
+    
+    let hi = ptr >> 32;
+    
+    Descriptor::SystemSegment(lo, hi) 
 }
 
 pub fn setup_gdt_for_local_core() {
@@ -141,15 +203,15 @@ pub fn setup_gdt_for_local_core() {
         let kernel_stack_top = VirtAddr::from_ptr(local_gdt.kernel_stack.as_ptr())
             + TSS_STACK_SIZE_BYTES as u64;
 
-        let mut tss = TaskStateSegment::new();
-        tss.interrupt_stack_table[DOUBLE_FAULT_IST_INDEX as usize] = df_stack_top;
-        tss.interrupt_stack_table[PAGE_FAULT_IST_INDEX as usize] = pgf_stack_top;
-        tss.privilege_stack_table[0]  = kernel_stack_top;
+        let mut tss = TssWithIopb::new();
+        tss.tss.interrupt_stack_table[DOUBLE_FAULT_IST_INDEX as usize] = df_stack_top;
+        tss.tss.interrupt_stack_table[PAGE_FAULT_IST_INDEX as usize] = pgf_stack_top;
+        tss.tss.privilege_stack_table[0]  = kernel_stack_top;
 
         unsafe {
             local_gdt.tss.as_mut_ptr().write(tss);
 
-            let tss_ref = &*local_gdt.tss.as_ptr();
+           let tss_ref: &'static TaskStateSegment = &(*local_gdt.tss.as_ptr()).tss;
 
             let mut gdt = GlobalDescriptorTable::new();
 
@@ -157,7 +219,8 @@ pub fn setup_gdt_for_local_core() {
             let sel_kdata = gdt.append(Descriptor::kernel_data_segment());
             let sel_udata = gdt.append(Descriptor::user_data_segment());
             let sel_ucode = gdt.append(Descriptor::user_code_segment());
-            let sel_tss   = gdt.append(Descriptor::tss_segment(tss_ref));
+
+            let sel_tss   = gdt.append(tss_descriptor_with_iopb(tss_ref));
 
             local_gdt.sel_kcode.as_mut_ptr().write(sel_kcode);
             local_gdt.sel_kdata.as_mut_ptr().write(sel_kdata);

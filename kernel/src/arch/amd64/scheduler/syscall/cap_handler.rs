@@ -2,7 +2,7 @@ use crate::{arch::amd64::{ipc::{message::Rights, object_table::{KernelObjType, O
 
 define_syscall_group! {
     pub enum CapSyscallNumbers {
-        CapCopy = 0x80,
+        CapCopy = 11,
     }   
 }
 

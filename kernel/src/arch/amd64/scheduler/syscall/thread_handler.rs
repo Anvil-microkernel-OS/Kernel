@@ -1,9 +1,9 @@
-use crate::{arch::amd64::scheduler::{sleep, syscall::{SyscallArguments, SyscallError}}, define_syscall_group};
+use crate::{arch::amd64::scheduler::{sleep, syscall::{SyscallArguments, SyscallError}}, define_syscall_group, early_println};
 
 define_syscall_group! {
     pub enum ThreadSyscallNums {
-        ThreadSleep = 0x99,
-        ThreadExit = 0x11
+        ThreadSleep = 9,
+        ThreadExit = 10
     }
 }
 

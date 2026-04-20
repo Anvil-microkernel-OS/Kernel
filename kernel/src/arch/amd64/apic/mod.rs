@@ -74,7 +74,7 @@ pub fn start_timer(lapic: &Lapic) {
     );
 }
 
-static IOAPIC: Once<IOApic> = Once::new();
+pub static IOAPIC: Once<IOApic> = Once::new();
 
 pub fn init_ioapic() {
     IOAPIC.call_once(|| {
@@ -101,9 +101,9 @@ pub fn install_ioapic_irq(irq_num: u8, vector_num: u8) {
         .with_destination_field(ioapic.ioapic_id().id()));
 }
 
-static KEYBOARD: Mutex<Option<Keyboard<layouts::Us104Key, ScancodeSet1>>> = Mutex::new(None);
+pub static KEYBOARD: Mutex<Option<Keyboard<layouts::Us104Key, ScancodeSet1>>> = Mutex::new(None);
 
-irq!(150, keyboard_irq, |stack| {
+/*irq!(150, keyboard_irq, |stack| {
     const KEYBOARD_PORT: u16 = 0x60;
 
     let mut lock = KEYBOARD.lock();
@@ -124,4 +124,4 @@ irq!(150, keyboard_irq, |stack| {
     }
 
     PercpuLapic::get().lapic.eoi();
-});
+});*/

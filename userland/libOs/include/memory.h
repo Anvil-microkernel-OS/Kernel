@@ -3,10 +3,10 @@
 #include "syscalls.h"
 #include "types.h"
 
-#define SYS_VMA_MAP     0x2
-#define SYS_VMA_UNMAP   0x3
-#define SYS_MPROTECT    0x4
-#define SYS_VMO_CREATE  0x5
+#define SYS_VMA_MAP     5
+#define SYS_VMA_UNMAP   6
+#define SYS_MPROTECT    7
+#define SYS_VMO_CREATE  8
 
 #define MAP_READ  (1 << 0)
 #define MAP_WRITE (1 << 1)

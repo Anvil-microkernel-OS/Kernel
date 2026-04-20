@@ -99,6 +99,22 @@ impl IOApic {
         IOAPICID::from(raw)
     }
 
+    pub fn unmask_irq(&self, gsi: u8) {
+        let offset = IOAPIC_REDIRECTION_TABLE_REGISTER_OFFSET + (gsi * 2);
+        let raw = self.read_64b_from_reg(offset as u8);
+        let mut entry = IOAPICRedirectionTableRegister::from(raw);
+        entry.set_interrupt_mask(false);
+        self.write_ioredtbl(gsi, entry);
+    }
+
+    pub fn mask_irq(&self, gsi: u8) {
+        let offset = IOAPIC_REDIRECTION_TABLE_REGISTER_OFFSET + (gsi * 2);
+        let raw = self.read_64b_from_reg(offset as u8);
+        let mut entry = IOAPICRedirectionTableRegister::from(raw);
+        entry.set_interrupt_mask(true);
+        self.write_ioredtbl(gsi, entry);
+    }
+
     pub fn write_ioredtbl(&self, entry: u8, value: IOAPICRedirectionTableRegister) {
         assert!(entry < 24, "Intel IOAPIC only has 24 entries!");
         let offset = IOAPIC_REDIRECTION_TABLE_REGISTER_OFFSET + (entry * 2);

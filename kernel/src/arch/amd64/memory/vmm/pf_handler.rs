@@ -17,7 +17,7 @@ isr!(14, page_fault, |frame| {
         hlt_loop();
     }
 
-    let curr_task_id = PerCpuSchedulerData::get().curr_task_id.id();
+    let curr_task_id = PerCpuSchedulerData::get().curr_task_id;
     let task = get_task_by_index(curr_task_id).unwrap();
     let mut addr_space = task.tcb.addr_space.lock();
 

@@ -3,7 +3,7 @@
 #include "types.h"
 #include "stdlib.h"
 
-#define SYS_PRINT          0x10
+#define SYS_PRINT          25
 
 static inline int64_t sys_print(const char *str, uint64_t len) {
     if ((uint64_t)str < 0x1000 || (uint64_t)str > 0x00007FFFFFFFFFFF) {
@@ -14,6 +14,10 @@ static inline int64_t sys_print(const char *str, uint64_t len) {
     }
     
     return syscall2(SYS_PRINT, (uint64_t)str, len);
+}
+
+static inline int64_t putchar(char c) {
+    return sys_print(&c, 1);  
 }
 
 static inline void printf(const char *fmt, ...) {

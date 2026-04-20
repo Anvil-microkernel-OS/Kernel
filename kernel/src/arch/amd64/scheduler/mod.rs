@@ -1,7 +1,7 @@
 use core::{arch::naked_asm, cell::UnsafeCell, ptr::addr_of, sync::atomic::{AtomicU64, Ordering}};
 use alloc::{sync::Arc, vec::Vec};
 use spin::Once;
-use x86_64::{VirtAddr, instructions::hlt};
+use x86_64::{VirtAddr, instructions::hlt, structures::tss::TaskStateSegment};
 
 pub mod task;
 mod stack;
@@ -9,12 +9,12 @@ mod cpu_local;
 pub mod exec_loader;
 pub mod addr_space;
 pub mod task_storage;
-mod syscall;
+pub mod syscall;
 
 use crate::{
     arch::amd64::{
-        acpi::{get_acpi_tables, madt::MadTable}, apic::{PercpuLapic, start_timer}, gdt::set_tss_rsp0, scheduler::{cpu_local::ExecCpu, exec_loader::make_kernel_task, syscall::{init_syscall_subsystem, set_per_cpu_TOP_OF_KERNEL_STACK}, task::{Task, TaskId, TaskIdIndex, TaskState}, task_storage::{add_task_to_execute, get_task_by_index, initialize_task_storage, steal_from_global, table}}
-    }, define_per_cpu_struct, irq
+        acpi::{get_acpi_tables, madt::MadTable}, apic::{PercpuLapic, start_timer}, gdt::{PercpuGdt, set_tss_iopb_enabled, set_tss_rsp0, tss_copy_iopb_data}, scheduler::{cpu_local::ExecCpu, exec_loader::make_kernel_task, syscall::{init_syscall_subsystem, set_per_cpu_TOP_OF_KERNEL_STACK}, task::{Task, TaskId, TaskState}, task_storage::{add_task_to_execute, get_task_by_index, initialize_task_storage, steal_from_global, table}}
+    }, define_per_cpu_struct, early_println, irq
 };
 
 static CPU_NUM: AtomicU64 = AtomicU64::new(0);
@@ -30,7 +30,7 @@ impl CpuDescriptorStorage {
     pub fn new(n_cpus: usize) -> Self {
         let mut cpus = Vec::with_capacity(n_cpus);
         initialize_task_storage();
-        for _ in 0..n_cpus { cpus.push(UnsafeCell::new(ExecCpu::new(make_kernel_task(TaskId::new(0), idle_task as u64)))); }
+        for _ in 0..n_cpus { cpus.push(UnsafeCell::new(ExecCpu::new(make_kernel_task(0, idle_task as u64)))); }
         Self { cpus }
     }
 
@@ -79,6 +79,8 @@ define_per_cpu_struct!{
         pub curr_task_id: TaskId,
         in_rescheduling: bool,
         descriptors: &'static CpuDescriptorStorage,
+        iopb_generation: usize,
+        iopb_owner: Option<TaskId>
     }
 }
 
@@ -92,6 +94,8 @@ pub fn init_scheduler_percpu() -> ! {
         data.curr_task_id = descriptors.cpu(cpu_id).idle_task.id;
         data.in_rescheduling = false;
         data.descriptors = CPU_DESCRIPTORS.get().unwrap();
+        data.iopb_generation = 0;
+        data.iopb_owner = None;
     });
 
     init_syscall_subsystem();
@@ -121,7 +125,7 @@ pub fn global_init_scheduler() {
     CPU_DESCRIPTORS.call_once(|| CpuDescriptorStorage::new(cpu_count));
 }  
 
-pub fn block_current_on_ipc() {
+pub fn block_current_task() {
     let my_id = PerCpuSchedulerData::get().cpu_id;
     let my_desc = PerCpuSchedulerData::get().descriptors.cpu_mut(my_id);
     let curr_ptr = my_desc.get_curr_task();
@@ -142,6 +146,10 @@ pub fn block_current_on_ipc() {
 
         switch_to_task(task_rsp_ptr, idle_rsp, idle_cr3.as_u64());
     }
+}
+
+pub fn block_task(task: Arc<Task>) {
+    task.tcb.task_state.store(TaskState::Sleep, Ordering::Relaxed);
 }
 
 pub fn sleep(ns: u64) {
@@ -182,7 +190,7 @@ fn wake_sleeping_tasks() {
 
     let now = TICK_COUNT.load(Ordering::Relaxed);
 
-    let to_wake: Vec<TaskIdIndex> = {
+    let to_wake: Vec<TaskId> = {
         let tasks = table().tasks.lock();
         tasks.values()
             .filter(|t| {
@@ -192,7 +200,7 @@ fn wake_sleeping_tasks() {
                 let wake_at = t.tcb.wake_at_tick.lock().load(Ordering::Acquire);
                 wake_at != 0 && now >= wake_at
             })
-            .map(|t| t.id.id())
+            .map(|t| t.id)
             .collect()
     }; 
 
@@ -284,6 +292,29 @@ fn process_tick() {
                 let next_rsp = (*(*next_ptr).registers.get()).rsp;
                 let next_cr3 = (*next_ptr).tcb.addr_space.lock().get_page_table_phys();
 
+                let perms = (*next_ptr).tcb.iopb_permissons.lock();
+
+                match &*perms {
+                    Some(permissions) => {
+                        let cpu = PerCpuSchedulerData::get_mut();
+                        if (*next_ptr).tcb.iopb_gen.load(Ordering::Acquire) as usize != cpu.iopb_generation
+                            || cpu.iopb_owner != Some((*next_ptr).id)
+                        {
+                            tss_copy_iopb_data(permissions.as_ref());
+                            set_tss_iopb_enabled(true);
+                            
+                            cpu.iopb_generation = (*next_ptr).tcb.iopb_gen.load(Ordering::Acquire) as usize;
+                            cpu.iopb_owner = Some((*next_ptr).id);
+                        }
+                    }   
+                    None => {
+                        set_tss_iopb_enabled(false);
+                        PerCpuSchedulerData::get_mut().iopb_owner = None;
+                    },
+                }
+
+                drop(perms);
+
                 switch_to_task(idle_rsp_ptr, next_rsp, next_cr3.as_u64());
             }
         },
@@ -304,6 +335,28 @@ fn process_tick() {
 
                 let next_rsp = (*(*next_ptr).registers.get()).rsp;
                 let next_cr3 = (*next_ptr).tcb.addr_space.lock().get_page_table_phys();
+
+                let perms = (*next_ptr).tcb.iopb_permissons.lock();
+
+                match &*perms {
+                    Some(permissions) => {
+                        let cpu = PerCpuSchedulerData::get_mut();
+                        if (*next_ptr).tcb.iopb_gen.load(Ordering::Acquire) as usize != cpu.iopb_generation
+                            || cpu.iopb_owner != Some((*next_ptr).id)
+                        {
+                            tss_copy_iopb_data(permissions.as_ref());
+                            set_tss_iopb_enabled(true);
+                            cpu.iopb_generation = (*next_ptr).tcb.iopb_gen.load(Ordering::Acquire) as usize;
+                            cpu.iopb_owner = Some((*next_ptr).id);
+                        }
+                    }   
+                    None => {
+                        set_tss_iopb_enabled(false);
+                        PerCpuSchedulerData::get_mut().iopb_owner = None;
+                    },
+                }
+
+                drop(perms);
 
                 switch_to_task(task_rsp_ptr, next_rsp, next_cr3.as_u64());
             }

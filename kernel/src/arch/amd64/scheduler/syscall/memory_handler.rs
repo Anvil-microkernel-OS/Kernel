@@ -5,10 +5,10 @@ use crate::{arch::amd64::{ipc::{message::{Capability, Rights}, object_table::{Ke
 
 define_syscall_group! {
     pub enum MemorySyscallNumbers {
-        VmaMap      = 0x2,
-        VmaUnmap    = 0x3,
-        Mprotect    = 0x4,
-        VmoCreate   = 0x5,
+        VmaMap      = 5,
+        VmaUnmap    = 6,
+        Mprotect    = 7,
+        VmoCreate   = 8,
     } 
 }
 

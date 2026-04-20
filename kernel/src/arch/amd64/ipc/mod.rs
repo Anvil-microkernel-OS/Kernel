@@ -1,19 +1,20 @@
 use alloc::collections::btree_map::BTreeMap;
 use spin::Mutex;
-use crate::{arch::amd64::{
+use crate::arch::amd64::{
     ipc::{
         endpoint::{Endpoint, EndpointId},
         message::{Capability, FastMessage, Rights},
         notification::Notification,
-    },
-    scheduler::task::TaskIdIndex,
-}, early_println};
+    }, scheduler::task::TaskId,
+};
 
 pub mod endpoint;
 pub mod message;
 pub mod notification;
 pub mod cnode;
 pub mod object_table;
+pub mod channel;
+pub mod port;
 
 pub static IPC_MANAGER: Mutex<IpcManager> = Mutex::new(IpcManager::new());
 
@@ -46,7 +47,7 @@ impl EndpointTable {
         }
     }
 
-    pub fn create_endpoint(&mut self, task_id: TaskIdIndex) -> Option<EndpointId> {
+    pub fn create_endpoint(&mut self, task_id: TaskId) -> Option<EndpointId> {
         for slot in self.endpoints.iter_mut() {
             if slot.is_none() {
                 let ep = Endpoint::new_with_id(EndpointId::new(task_id as u64));
@@ -78,7 +79,7 @@ impl EndpointTable {
 }
 
 pub enum IpcResult {
-    WakeReceiver { receiver: TaskIdIndex },
+    WakeReceiver { receiver: TaskId },
     BlockCurrent,
     NotReady,
     Done,
@@ -98,7 +99,7 @@ impl IpcManager {
         }
     }
 
-    pub fn create_endpoint(&mut self, task_id: TaskIdIndex) -> Option<EndpointId> {
+    pub fn create_endpoint(&mut self, task_id: TaskId) -> Option<EndpointId> {
         self.table.create_endpoint(task_id)
     }
 
@@ -116,7 +117,7 @@ impl IpcManager {
 
     pub fn handle_send(
         &mut self,
-        sender_id: TaskIdIndex,
+        sender_id: TaskId,
         ep_id:     EndpointId,
         msg:       FastMessage,
     ) -> IpcResult {
@@ -138,7 +139,7 @@ impl IpcManager {
 
     pub fn handle_recv(
         &mut self,
-        receiver_id: TaskIdIndex,
+        receiver_id: TaskId,
         ep_id:       EndpointId,
     ) -> IpcResult {
         let ep = match self.table.get_endpoint(ep_id) {
@@ -154,7 +155,7 @@ impl IpcManager {
 
     pub fn handle_call(
         &mut self,
-        caller_id: TaskIdIndex,
+        caller_id: TaskId,
         ep_id:     EndpointId,
         msg:       FastMessage,
     ) -> IpcResult {
@@ -163,7 +164,7 @@ impl IpcManager {
 
     pub fn handle_reply(
         &mut self,
-        caller_id: TaskIdIndex,
+        caller_id: TaskId,
         reply_msg: FastMessage,
     ) -> IpcResult {
         self.store_pending_message(caller_id, reply_msg);

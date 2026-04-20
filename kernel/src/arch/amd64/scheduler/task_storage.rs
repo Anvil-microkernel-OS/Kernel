@@ -1,9 +1,9 @@
 use alloc::{collections::{VecDeque, btree_map::BTreeMap}, sync::Arc};
 use spin::{Mutex, Once};
-use crate::{arch::amd64::scheduler::task::{Task, TaskId, TaskIdIndex}, early_println};
+use crate::{arch::amd64::scheduler::task::{Task, TaskId}};
 
 pub struct TaskTable {
-    pub tasks: Mutex<BTreeMap<TaskIdIndex, Arc<Task>>>,
+    pub tasks: Mutex<BTreeMap<TaskId, Arc<Task>>>,
 }
 
 impl TaskTable {
@@ -12,14 +12,14 @@ impl TaskTable {
     }
 
     pub fn insert(&self, task: Arc<Task>) {
-        self.tasks.lock().insert(task.id.id(), task);
+        self.tasks.lock().insert(task.id, task);
     }
 
-    pub fn get_by_index(&self, idx: TaskIdIndex) -> Option<Arc<Task>> {
+    pub fn get_by_index(&self, idx: TaskId) -> Option<Arc<Task>> {
         self.tasks.lock().get(&idx).cloned()
     }
 
-    pub fn remove(&self, idx: TaskIdIndex) {
+    pub fn remove(&self, idx: TaskId) {
         self.tasks.lock().remove(&idx);
     }
 }
@@ -64,15 +64,15 @@ pub fn add_task_to_execute(task: Arc<Task>) -> TaskId {
     id
 }
 
-pub fn get_task_by_index(idx: TaskIdIndex) -> Option<Arc<Task>> {
+pub fn get_task_by_index(idx: TaskId) -> Option<Arc<Task>> {
     table().get_by_index(idx)
 }
 
-pub fn remove_task(idx: TaskIdIndex) {
+pub fn remove_task(idx: TaskId) {
     table().remove(idx);
 }
 
-pub fn inject_sleeping_task(idx: TaskIdIndex) {
+pub fn inject_sleeping_task(idx: TaskId) {
     if let Some(task) = table().get_by_index(idx) {
         global_queue().push(task);
     }
