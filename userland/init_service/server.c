@@ -6,7 +6,6 @@ typedef struct {
     uint64_t self_tcb_cap;
     uint64_t self_vspace_cap;
     uint64_t self_cnode_cap;
-    uint64_t ipc_buff_addr;
     uint64_t cpio_base_addr;
     uint64_t cpio_size;
 } BootInfo_t;
@@ -62,42 +61,20 @@ void _start(BootInfo_t* boot_info) {
     }
     printf("Found server.elf: %d bytes at 0x%x\n", (int)elf_size, (uint64_t)elf_data);
 
-    ret = tcb_create();
+    child_cap_slots_t slots;
+
+    ret = tcb_create(&slots);
     if (ret < 0) {
         printf("Failed to create TCB: %d\n", ret);
         kill_sleep();
     }
 
-    uint64_t *slots = (uint64_t *)boot_info->ipc_buff_addr;
-    int tcb_slave_slot    = slots[0];
-    int vspace_slave_slot = slots[1];
-    int cnode_slave_slot  = slots[2];
     printf("Slave caps: tcb=%d vspace=%d cnode=%d\n",
-           tcb_slave_slot, vspace_slave_slot, cnode_slave_slot);
-
-    int ipc_vmo = vmo_create(0x1000);
-    if (ipc_vmo < 0) {
-        printf("Failed to create IPC VMO: %d\n", ipc_vmo);
-        kill_sleep();
-    }
-
-    ret = vma_map(vspace_slave_slot, ipc_vmo, 0x0000, MAP_READ | MAP_WRITE | MAP_USER);
-    if (ret < 0) {
-        printf("Failed to map slave ipc_buff: %d\n", ret);
-        kill_sleep();
-    }
-    uint64_t slave_ipc_vaddr = (uint64_t)ret;
-    printf("Slave ipc_buff mapped at 0x%x\n", slave_ipc_vaddr);
-
-    ret = tcb_configure(tcb_slave_slot, vspace_slave_slot, slave_ipc_vaddr, ipc_vmo);
-    if (ret < 0) {
-        printf("Failed to configure TCB: %d\n", ret);
-        kill_sleep();
-    }
+           slots.tcb_slot, slots.vspace_slot, slots.cnode_slot);
 
     uint64_t entry = load_elf(elf_data, elf_size,
                               boot_info->self_vspace_cap,
-                              vspace_slave_slot);
+                              slots.vspace_slot);
     if (entry < 0) {
         printf("Failed to load ELF\n");
         kill_sleep();
@@ -111,7 +88,7 @@ void _start(BootInfo_t* boot_info) {
     }
 
     uint64_t stack_bottom = USER_STACK_TOP - USER_STACK_SIZE;
-    ret = vma_map(vspace_slave_slot, stack_vmo, stack_bottom, MAP_READ | MAP_WRITE | MAP_USER);
+    ret = vma_map(slots.vspace_slot, stack_vmo, stack_bottom, MAP_READ | MAP_WRITE | MAP_USER);
     if (ret < 0) {
         printf("Failed to map slave stack\n");
         kill_sleep();
@@ -125,9 +102,9 @@ void _start(BootInfo_t* boot_info) {
         kill_sleep();
     }
 
-    uint64_t slave_tcb_slot = cap_copy(boot_info->self_cnode_cap, cnode_slave_slot, tcb_slave_slot);
-    uint64_t slave_vspace_slot = cap_copy(boot_info->self_cnode_cap, cnode_slave_slot, vspace_slave_slot);
-    uint64_t slave_cnode_slot = cap_copy(boot_info->self_cnode_cap, cnode_slave_slot, cnode_slave_slot);
+    uint64_t slave_tcb_slot = cap_copy(boot_info->self_cnode_cap, slots.cnode_slot, slots.tcb_slot);
+    uint64_t slave_vspace_slot = cap_copy(boot_info->self_cnode_cap, slots.cnode_slot, slots.vspace_slot);
+    uint64_t slave_cnode_slot = cap_copy(boot_info->self_cnode_cap, slots.cnode_slot, slots.cnode_slot);
 
     printf("slave_tcb_slot: %d, slave_vspace_slot: %d, slave_cnode_slot: %d\n", slave_tcb_slot, slave_vspace_slot, slave_cnode_slot);
 
@@ -155,7 +132,7 @@ void _start(BootInfo_t* boot_info) {
         kill_sleep();
     }
 
-    uint64_t slave_channel_cap = cap_copy(boot_info->self_cnode_cap, cnode_slave_slot, pair.dst_cap);
+    uint64_t slave_channel_cap = cap_copy(boot_info->self_cnode_cap, slots.cnode_slot, pair.dst_cap);
 
     UserBootInfo slave_boot = {
         .self_tcb_cap    = slave_tcb_slot,
@@ -183,18 +160,18 @@ void _start(BootInfo_t* boot_info) {
 
     printf("Pushed boot info to slave proc\n");
 
-    uint64_t *regs = (uint64_t *)boot_info->ipc_buff_addr;
-    regs[0] = slave_rsp;        
-    regs[1] = entry;             
-    regs[2] = boot_info_addr;   
+    general_registers_t regs;
+    regs.rsp = slave_rsp;
+    regs.rip = entry;
+    regs.rdi = boot_info_addr;
 
-    ret = tcb_set_regs(tcb_slave_slot);
+    ret = tcb_set_regs(slots.tcb_slot, TCB_GENERAL_REGISTERS, &regs);
     if (ret < 0) {
         printf("Failed to set TCB registers: %d\n", ret);
         kill_sleep();
     }
 
-    ret = tcb_resume(tcb_slave_slot);
+    ret = tcb_resume(slots.tcb_slot);
     if (ret < 0) {
         printf("Failed to resume TCB: %d\n", ret);
         kill_sleep();

@@ -12,7 +12,6 @@ pub const USER_STACK_TOP_VIRT_ADDR: u64 = 0x7FFF_FFFF_0000;
 pub const USER_LOAD_VADDR: u64 = 0x0040_0000;
 pub const USER_ENTRY_VADDR: u64 = USER_LOAD_VADDR; 
 pub const BOOTINFO_VADDR: u64 = 0x0000_0001_0000;
-pub const IPC_BUFF_VADDR: u64 = 0x0000;
 
 pub const USER_CPIO_START_VADDR: u64 = 0x7FFF_F000_0000;
 
@@ -28,7 +27,6 @@ pub struct InitSvrsBootInfo {
     pub self_tcb_cap:    u64,
     pub self_vspace_cap: u64,
     pub self_cnode_cap:  u64,
-    pub ipc_buff_addr: u64,
     pub cpio_base_addr: u64,
     pub cpio_size: u64
 }
@@ -61,7 +59,6 @@ pub fn make_init_caps(task_id: TaskId, cnode: &mut CNode) -> InitSvrsBootInfo {
         self_tcb_cap,
         self_vspace_cap,
         self_cnode_cap,
-        ipc_buff_addr: IPC_BUFF_VADDR,
         cpio_base_addr: 0, // later filled by exec_loader
         cpio_size: 0 // later filled by exec_loader
     }
@@ -180,23 +177,6 @@ pub fn make_init_task(
         .flush();
     }
 
-    let ipc_buff_phys = alloc_pages_by_order(0, PAllocFlags::KERNEL | PAllocFlags::ZEROED)
-        .expect("make_init_task: ipc buffer OOM");
-
-    let ipc_buff_page = Page::<Size4KiB>::containing_address(VirtAddr::new(IPC_BUFF_VADDR));
-    let ipc_buff_frame = PhysFrame::<Size4KiB>::containing_address(ipc_buff_phys);
-
-    unsafe {
-        pt.map_to(
-            ipc_buff_page,
-            ipc_buff_frame,
-            PageTableFlags::PRESENT
-                | PageTableFlags::USER_ACCESSIBLE | PageTableFlags::WRITABLE,
-            &mut KernelFrameAllocator,
-        )
-        .unwrap()
-        .flush();
-    }
 
     // kernel stack + trampoline
     let kernel_stack = allocate_kernel_stack(DEFAULT_KERNEL_STACK_SIZE);
@@ -227,8 +207,6 @@ pub fn make_init_task(
             kernel_stack,
             cnode: Mutex::new(cnode),
             task_state: AtomicTaskState::new(TaskState::Ready),
-            ipc_buff_paddr: Mutex::new(Some(ipc_buff_phys.as_u64() as usize)),
-            ipc_buff_vaddr: Mutex::new(Some(ipc_buff_page.start_address())),
             iopb_permissons: Mutex::new(None),
             iopb_gen: AtomicU64::new(0)
         },
@@ -288,8 +266,6 @@ pub fn make_kernel_task(id: TaskId, entry_point: u64) -> Task {
             kernel_stack, 
             cnode: Mutex::new(CNode::new()), 
             task_state: AtomicTaskState::new(TaskState::Ready),
-            ipc_buff_paddr: Mutex::new(None),
-            ipc_buff_vaddr: Mutex::new(None),
             iopb_permissons: Mutex::new(None),
             iopb_gen: AtomicU64::new(0)
         }

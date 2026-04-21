@@ -32,9 +32,6 @@ pub struct Tcb {
     pub cnode: Mutex<CNode>,
     pub task_state: AtomicTaskState,
 
-    pub ipc_buff_paddr: Mutex<Option<usize>>,
-    pub ipc_buff_vaddr: Mutex<Option<VirtAddr>>,
-
     pub iopb_permissons: Mutex<Option<Box<[u8; IO_PORTS]>>>,
     pub iopb_gen: AtomicU64,
 }

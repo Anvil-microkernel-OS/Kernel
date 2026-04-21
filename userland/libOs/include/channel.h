@@ -10,6 +10,7 @@
 #define SYS_CH_WAIT 16
 #define SYS_CH_CALL 17
 #define SYS_CH_STATUS 18
+#define SYS_CH_EXC_OPEN 4
 
 typedef struct {
     uint64_t src_cap;
@@ -158,3 +159,6 @@ static inline int64_t channel_status(uint64_t cap, channel_status_t* status) {
     return syscall2(SYS_CH_STATUS, cap, (uint64_t)status);
 }
 
+static inline int64_t exception_channel_open(uint64_t flags, uint64_t* descriptor) {
+    return 0;
+}
