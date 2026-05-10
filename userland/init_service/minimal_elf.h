@@ -56,9 +56,10 @@ static void memset_simple(void *dst, uint8_t val, uint64_t n) {
 }
 
 static int64_t load_elf(const uint8_t *elf_data, uint64_t elf_size,
-                        int self_vspace, int slave_vspace) {
+                        uint64_t self_vspace, uint64_t slave_vspace) {
     const Elf64_Ehdr *ehdr = (const Elf64_Ehdr *)elf_data;
-
+    
+    // Проверить ELF magic
     if (ehdr->e_ident[0] != 0x7f || ehdr->e_ident[1] != 'E' ||
         ehdr->e_ident[2] != 'L'  || ehdr->e_ident[3] != 'F') {
         printf("Invalid ELF magic\n");
@@ -66,38 +67,49 @@ static int64_t load_elf(const uint8_t *elf_data, uint64_t elf_size,
     }
 
     const Elf64_Phdr *phdrs = (const Elf64_Phdr *)(elf_data + ehdr->e_phoff);
-
+    
     for (int i = 0; i < ehdr->e_phnum; i++) {
         const Elf64_Phdr *ph = &phdrs[i];
+        
         if (ph->p_type != PT_LOAD) continue;
         if (ph->p_memsz == 0) continue;
 
-        int vmo = vmo_create(ph->p_memsz);
+        int64_t vmo = vmo_create(ph->p_memsz, VmoPhysical);
         if (vmo < 0) {
             printf("load_elf: vmo_create failed for segment %d\n", i);
             return -1;
         }
 
-        uint64_t tmp = vma_map(self_vspace, vmo, 0x0000, MAP_READ | MAP_WRITE);
-        if (tmp < 0) {
-            printf("load_elf: vma_map(self) failed for segment %d\n", i);
-            return -1;
-        }
-
         if (ph->p_filesz > 0) {
-            memcpy_simple((void *)tmp, elf_data + ph->p_offset, ph->p_filesz);
+            int64_t written = vmo_write(
+                vmo,                              // vmo_cap
+                (void *)(elf_data + ph->p_offset),  // data_ptr
+                0,                                // offset in VMO
+                ph->p_filesz                      // how much
+            );
+            
+            if (written < 0 || written != (int64_t)ph->p_filesz) {
+                printf("load_elf: vmo_write failed for segment %d\n", i);
+                return -1;
+            }
         }
 
         if (ph->p_memsz > ph->p_filesz) {
-            memset_simple((void *)(tmp + ph->p_filesz), 0, ph->p_memsz - ph->p_filesz);
+            //todo fill zero
         }
 
-        vma_unmap(self_vspace, tmp);
-
-        uint32_t flags = elf_flags_to_map(ph->p_flags);
-        uint64_t mapped = vma_map(slave_vspace, vmo, ph->p_vaddr, flags);
+         mmap_args_t mmap_args = {
+            .vscape_cap = slave_vspace,
+            .vmo_cap = (uint64_t)vmo,
+            .vaddr = ph->p_vaddr,              
+            .size = ph->p_memsz,
+            .vmo_offset = 0,
+            .flags = elf_flags_to_map(ph->p_flags)
+        };
+        
+        uint64_t mapped = vma_map(&mmap_args);
         if (mapped < 0) {
-            printf("load_elf: vma_map(slave) failed for segment %d at 0x%x\n",
+            printf("load_elf: vma_map(slave) failed for segment %d at 0x%lx\n",
                    i, ph->p_vaddr);
             return -1;
         }

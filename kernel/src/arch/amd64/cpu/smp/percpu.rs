@@ -18,7 +18,6 @@ pub struct PerCpuRegion {
     pub base: VirtAddr,
 }
 
-
 pub struct PerCpuTemplate {
     pub data_size: usize,
     pub bss_size: usize,

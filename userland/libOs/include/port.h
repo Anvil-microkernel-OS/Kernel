@@ -2,12 +2,12 @@
 #include "syscalls.h"
 #include "types.h"
 
-#define SYS_PORT_CREATE 19
-#define SYS_PORT_CLOSE 20
-#define SYS_PORT_BIND 21
-#define SYS_PORT_UNBIND 22
-#define SYS_PORT_WAIT 23
-#define SYS_PORT_POLL 24
+#define SYS_PORT_CREATE 40
+#define SYS_PORT_CLOSE 41
+#define SYS_PORT_BIND 42
+#define SYS_PORT_UNBIND 43
+#define SYS_PORT_WAIT 44
+#define SYS_PORT_POLL 45
 
 #define PORT_EVENT_READABLE 0
 #define PORT_EVENT_PEER_CLOSED 1
@@ -54,6 +54,7 @@ static inline int64_t port_wait(uint64_t port, uint64_t timeout, port_packet_t* 
     }
     return ret;
 }
+
 static inline int64_t port_poll(uint64_t cap) {
     return syscall1(SYS_PORT_POLL, cap);
 }

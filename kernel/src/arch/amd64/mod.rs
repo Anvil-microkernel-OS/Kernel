@@ -1,6 +1,7 @@
-use x86_64::{VirtAddr, instructions};
+use spin::Once;
+use x86_64::instructions;
 
-use crate::{arch::amd64::{acpi::{get_acpi_tables, init_acpi, madt::MadTable}, apic::{init_ioapic, init_lapic}, cpu::{cpuid::get_cpuid_full, smp::{percpu::{get_region_by_id, init_percpu_regions}, startup::{early_setup_percpu_bsp, smp_startup}}}, gdt::init_bootstrap_gdt, interrupts::idt::init_idt, memory::{MemoryInitInfo, init_memory_subsys, u_k_boundary::uaccsess::enable_smep}, scheduler::global_init_scheduler, timer::initialize_hpet}, bootinfo::BootInfo, early_println};
+use crate::{arch::amd64::{acpi::init_acpi, apic::{disable_pic, init_lapic, ioapic_manager::ioapic_manager_init}, cpu::{cpuid::{CpuIdInfoFull, get_cpuid_full}, smp::{percpu::{get_region_by_id, init_percpu_regions}, startup::{early_setup_percpu_bsp, smp_startup}}}, gdt::init_bootstrap_gdt, interrupts::idt::init_idt, memory::{MemoryInitInfo, init_memory_subsys, u_k_boundary::uaccsess::enable_smep}, scheduler::global_init_scheduler, timer::initialize_hpet}, bootinfo::BootInfo, early_println};
 
 pub mod serial;
 pub mod cpu;
@@ -13,6 +14,9 @@ mod apic;
 mod timer;
 pub mod scheduler;
 pub mod ipc;
+pub mod capability_sys;
+
+static CPUID_INFO: Once<CpuIdInfoFull> = Once::new();
 
 fn early_startup() {
     instructions::interrupts::disable();
@@ -33,8 +37,14 @@ fn early_startup() {
     early_println!("Memory subsystem initialized!");
 
     early_println!("Initializing cpu submodule...");
-    let cpu_info = get_cpuid_full();
-    early_println!("{}", cpu_info);
+
+    CPUID_INFO.call_once(|| {
+        early_println!("[CPUID] Fetching CPUID information...");
+        get_cpuid_full()
+    });
+
+
+    early_println!("{}", CPUID_INFO.get().expect("Not initialized"));
     early_println!("Cpu submodule intialized!");
 
     early_println!("Initializing ACPI submodule...");
@@ -53,12 +63,16 @@ fn early_startup() {
     initialize_hpet();
     early_println!("HPET timer initialized!");
 
+    early_println!("Disabling legacy PIC...");
+    disable_pic();
+    early_println!("Legacy PIC disabled!");
+
     early_println!("Initializing LAPIC for BSP...");
-    init_lapic();
+    init_lapic(CPUID_INFO.get().unwrap().has_x2apic);
     early_println!("LAPIC initialized!");
 
     early_println!("Initializing IOAPIC...");
-    init_ioapic();
+    ioapic_manager_init();
     early_println!("IOAPIC initialized!");
 
     early_println!("Prepare scheduler...");

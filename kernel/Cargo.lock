@@ -8,6 +8,7 @@ version = "0.1.0"
 dependencies = [
  "acpi",
  "atomic_enum",
+ "bit_field",
  "bitfield-struct",
  "bitflags 2.11.0",
  "cc",
@@ -16,7 +17,6 @@ dependencies = [
  "limine",
  "linked_list_allocator",
  "paste",
- "pc-keyboard",
  "raw-cpuid 11.6.0",
  "spin 0.10.0",
  "uart_16550",
@@ -159,12 +159,6 @@ name = "paste"
 version = "1.0.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "57c0d7b74b563b49d38dae00a0c37d4d6de9b432382b2892f0574ddcae73fd0a"
-
-[[package]]
-name = "pc-keyboard"
-version = "0.8.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f0ca629cbb3f0d5b699c338f0129ff78c9bfd7ea8b1258ad529bff490dc8ed5a"
 
 [[package]]
 name = "pci_types"

@@ -1,11 +1,20 @@
-use alloc::{collections::BTreeMap, vec::Vec};
-use x86_64::{PhysAddr, VirtAddr, structures::paging::{OffsetPageTable, PageTable, PageTableFlags}};
-use crate::{arch::amd64::memory::{misc::virt_to_phys, pmm::pages_allocator::{PAllocFlags, alloc_pages_by_order, free_pages}, vmm::{
-    PAGE_SIZE, map_single_page, unmap_single_page
-}}, early_println};
+use alloc::{collections::BTreeMap, sync::Arc, vec::Vec};
+use spin::Mutex;
+use x86_64::{
+    PhysAddr, VirtAddr,
+    structures::paging::{
+        OffsetPageTable, PageTable, PageTableFlags,
+        mapper::Translate,
+    },
+};
+use crate::arch::amd64::memory::{
+        misc::virt_to_phys,
+        pmm::pages_allocator::free_pages,
+        vmm::{PAGE_SIZE, map_single_page, unmap_single_page, update_page_flags}, vmo::Vmo,
+    };
 
 bitflags::bitflags! {
-    #[derive(Clone, Copy)]
+    #[derive(Clone, Copy, Debug)]
     pub struct MapFlags: u32 {
         const READ    = 1 << 0;
         const WRITE   = 1 << 1;
@@ -16,7 +25,7 @@ bitflags::bitflags! {
 }
 
 impl MapFlags {
-    pub fn to_page_table_flags(&self) -> PageTableFlags { 
+    pub fn to_page_table_flags(&self) -> PageTableFlags {
         let mut f = PageTableFlags::PRESENT;
         if self.contains(Self::WRITE)   { f |= PageTableFlags::WRITABLE; }
         if self.contains(Self::USER)    { f |= PageTableFlags::USER_ACCESSIBLE; }
@@ -26,19 +35,12 @@ impl MapFlags {
     }
 }
 
-pub enum VmaBacking {
-    Physical { phys_addr: PhysAddr },
-    Device   { phys_addr: PhysAddr },
-    Reserved,
-    Allocated,
-    Vmo      { frames: Vec<PhysAddr> }
-}
-
 pub struct Vma {
-    pub vaddr:   VirtAddr,
-    pub size:    usize,
-    pub flags:   MapFlags,
-    pub backing: VmaBacking,
+    pub vaddr:      VirtAddr,
+    pub size:       usize,
+    pub flags:      MapFlags,
+    pub vmo:        Arc<Mutex<Vmo>>,
+    pub vmo_offset: usize,
 }
 
 impl Vma {
@@ -51,10 +53,16 @@ impl Vma {
     pub fn overlaps(&self, other: &Vma) -> bool {
         self.vaddr < other.end() && other.vaddr < self.end()
     }
+
+    pub fn vmo_page_index(&self, va: VirtAddr) -> Option<usize> {
+        if !self.contains(va) { return None; }
+        let offset_in_vma = (va.as_u64() - self.vaddr.as_u64()) as usize;
+        Some((self.vmo_offset + offset_in_vma) / PAGE_SIZE)
+    }
 }
 
 pub struct AddrSpace {
-    pub vmas:       BTreeMap<u64, Vma>,   
+    pub vmas:       BTreeMap<u64, Vma>,
     pub page_table: OffsetPageTable<'static>,
 }
 
@@ -63,6 +71,8 @@ pub enum VmaError {
     NotAligned,
     Overlap,
     NotFound,
+    OutOfVmoBounds,
+    OutOfMemory,
     PageTableError(&'static str),
 }
 
@@ -78,54 +88,60 @@ impl AddrSpace {
 
     pub fn map(
         &mut self,
-        vaddr:   VirtAddr,
-        size:    usize,
-        backing: VmaBacking,
-        flags:   MapFlags,
-    ) -> Result<(), VmaError> {
-        if !vaddr.is_aligned(PAGE_SIZE as u64) || size % PAGE_SIZE != 0 {
+        vaddr:      Option<VirtAddr>,
+        size:       usize,
+        vmo:        Arc<Mutex<Vmo>>,
+        vmo_offset: usize,
+        flags:      MapFlags,
+    ) -> Result<VirtAddr, VmaError> {
+        if size == 0
+            || size % PAGE_SIZE != 0
+            || vmo_offset % PAGE_SIZE != 0
+        {
             return Err(VmaError::NotAligned);
         }
 
+        if let Some(va) = vaddr {
+            if !va.is_aligned(PAGE_SIZE as u64) {
+                return Err(VmaError::NotAligned);
+            }
+        }
 
-        let vma = Vma { vaddr, size, flags, backing };
+        {
+            let v = vmo.lock();
+            if vmo_offset.checked_add(size).map(|e| e > v.size).unwrap_or(true) {
+                return Err(VmaError::OutOfVmoBounds);
+            }
+        }
+
+        let chosen = match vaddr {
+            Some(va) => va,
+            None => self.find_free_region(size).ok_or(VmaError::OutOfMemory)?,
+        };
+
+        let vma = Vma { vaddr: chosen, size, flags, vmo, vmo_offset };
 
         if self.find_overlapping(&vma).is_some() {
             return Err(VmaError::Overlap);
         }
 
-        self.map_in_page_table(&vma)
+        self.populate_page_table(&vma)
             .map_err(VmaError::PageTableError)?;
 
-        self.vmas.insert(vaddr.as_u64(), vma);
-        Ok(())
+        self.vmas.insert(chosen.as_u64(), vma);
+        Ok(chosen)
     }
 
     pub fn unmap(&mut self, vaddr: VirtAddr) -> Result<(), VmaError> {
         let vma = self.vmas.remove(&vaddr.as_u64())
             .ok_or(VmaError::NotFound)?;
-        
+
         let pages = vma.size / PAGE_SIZE;
         for i in 0..pages {
             let va = VirtAddr::new(vma.vaddr.as_u64() + (i * PAGE_SIZE) as u64);
-            match &vma.backing {
-                VmaBacking::Reserved => {
-                    let _ = unmap_single_page(&mut self.page_table, va);
-                }
-                VmaBacking::Physical { .. } | VmaBacking::Device { .. } => {
-                    unmap_single_page(&mut self.page_table, va)
-                        .map_err(VmaError::PageTableError)?;
-                },
-                VmaBacking::Allocated => {
-                    if let Ok(pa) = unmap_single_page(&mut self.page_table, va) {
-                        free_pages(pa);  
-                    }
-                },
-                VmaBacking::Vmo { .. } => {
-                    let _ = unmap_single_page(&mut self.page_table, va);
-                }
-            }
+            let _ = unmap_single_page(&mut self.page_table, va);
         }
+        // TODO: TLB shootdown на всех CPU, где активна эта AddrSpace.
         Ok(())
     }
 
@@ -153,9 +169,7 @@ impl AddrSpace {
     }
 
     pub fn translate(&self, vaddr: VirtAddr) -> Option<PhysAddr> {
-        use x86_64::structures::paging::mapper::Translate;
-        self.page_table
-            .translate_addr(vaddr)
+        self.page_table.translate_addr(vaddr)
     }
 
     pub fn protect(
@@ -163,40 +177,18 @@ impl AddrSpace {
         vaddr: VirtAddr,
         flags: MapFlags,
     ) -> Result<(), VmaError> {
-        let (size, backing) = {
-            let vma = self.vmas.get(&vaddr.as_u64())
-                .ok_or(VmaError::NotFound)?;
-            (vma.size, &vma.backing as *const VmaBacking)
-        };
+        let size = self.vmas.get(&vaddr.as_u64())
+            .ok_or(VmaError::NotFound)?
+            .size;
 
         let pt_flags = flags.to_page_table_flags();
-        let pages    = size / PAGE_SIZE;
+        let pages = size / PAGE_SIZE;
 
         for i in 0..pages {
             let va = VirtAddr::new(vaddr.as_u64() + (i * PAGE_SIZE) as u64);
-
-            let phys = unsafe { match &*backing {
-                VmaBacking::Physical { phys_addr } |
-                VmaBacking::Device   { phys_addr } => {
-                    PhysAddr::new(phys_addr.as_u64() + (i * PAGE_SIZE) as u64)
-                }
-                VmaBacking::Allocated => {
-                    use x86_64::structures::paging::mapper::Translate;
-                    self.page_table
-                        .translate_addr(va)
-                        .ok_or(VmaError::NotFound)?
-                }
-                VmaBacking::Vmo { frames } => {
-                    *frames.get(i).ok_or(VmaError::NotFound)?
-                }
-                VmaBacking::Reserved => continue,
-            }};
-
-            unmap_single_page(&mut self.page_table, va)
-                .map_err(VmaError::PageTableError)?;
-            map_single_page(&mut self.page_table, va, phys, pt_flags)
-                .map_err(VmaError::PageTableError)?;
+            let _ = update_page_flags(&mut self.page_table, va, pt_flags);
         }
+        // TODO: TLB shootdown.
 
         self.vmas.get_mut(&vaddr.as_u64()).unwrap().flags = flags;
         Ok(())
@@ -210,31 +202,16 @@ impl AddrSpace {
             .filter(|vma| vma.contains(addr))
     }
 
-    fn map_in_page_table(&mut self, vma: &Vma) -> Result<(), &'static str> {
-        let pages    = vma.size / PAGE_SIZE;
+    fn populate_page_table(&mut self, vma: &Vma) -> Result<(), &'static str> {
+        let pages = vma.size / PAGE_SIZE;
         let pt_flags = vma.flags.to_page_table_flags();
+        let start_idx = vma.vmo_offset / PAGE_SIZE;
 
+        let vmo = vma.vmo.lock();
         for i in 0..pages {
             let va = VirtAddr::new(vma.vaddr.as_u64() + (i * PAGE_SIZE) as u64);
-
-            match &vma.backing {
-                VmaBacking::Physical { phys_addr } |
-                VmaBacking::Device   { phys_addr } => {
-                    let pa = PhysAddr::new(phys_addr.as_u64() + (i * PAGE_SIZE) as u64);
-                    map_single_page(&mut self.page_table, va, pa, pt_flags)?;
-                }
-                VmaBacking::Reserved => {
-                },
-
-                VmaBacking::Allocated => {
-                    let pa = alloc_pages_by_order(0, PAllocFlags::KERNEL | PAllocFlags::ZEROED)
-                        .ok_or("OOM")?;
-                    map_single_page(&mut self.page_table, va, pa, pt_flags)?;
-                },
-                VmaBacking::Vmo { frames } => {
-                    let pa = frames[i];  
-                    map_single_page(&mut self.page_table, va, pa, pt_flags)?;
-                }
+            if let Some(frame) = vmo.frame_at(start_idx + i) {
+                map_single_page(&mut self.page_table, va, frame, pt_flags)?;
             }
         }
         Ok(())
@@ -252,36 +229,19 @@ impl AddrSpace {
 impl Drop for AddrSpace {
     fn drop(&mut self) {
         let vaddrs: Vec<u64> = self.vmas.keys().copied().collect();
-
         for vaddr in vaddrs {
             let vma = self.vmas.remove(&vaddr).unwrap();
             let pages = vma.size / PAGE_SIZE;
-
             for i in 0..pages {
                 let va = VirtAddr::new(vma.vaddr.as_u64() + (i * PAGE_SIZE) as u64);
-
-                match &vma.backing {
-                    VmaBacking::Physical { .. } => {
-                        let _ = unmap_single_page(&mut self.page_table, va);
-                    }
-                    VmaBacking::Device { .. } => {
-                        let _ = unmap_single_page(&mut self.page_table, va);
-                    }
-                    VmaBacking::Reserved => {
-                        let _ = unmap_single_page(&mut self.page_table, va);
-                    }
-                    VmaBacking::Allocated => {
-                        if let Ok(pa) = unmap_single_page(&mut self.page_table, va) {
-                            free_pages(pa);
-                        }
-                    }
-                    VmaBacking::Vmo { .. } => {
-                        let _ = unmap_single_page(&mut self.page_table, va);
-                    }
-                }
+                let _ = unmap_single_page(&mut self.page_table, va);
             }
         }
 
+        // TODO: рекурсивно пройти L4 → L3 → L2 → L1 и освободить все
+        // промежуточные page tables, которые относятся к user-half.
+        // Сейчас free_pages освобождает только L4, а L1/L2/L3 утекают.
+        // Kernel-half таблицы — общие между всеми процессами, их трогать нельзя.
         let pt_phys = self.get_page_table_phys();
         free_pages(pt_phys);
     }

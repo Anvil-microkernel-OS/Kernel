@@ -1,167 +1,94 @@
-use crate::{arch::amd64::{ipc::{message::{Capability, Rights}, object_table::{KernelObjType, KernelObject, ObjData, obj_insert, obj_remove, with_object, with_object_mut}, port::{Port, PortAction, PortErr}}, scheduler::{awaken_task, block_current_task, syscall::{SyscallArguments, SyscallError, cap_check::resolve_cap}, task::TaskRegisters, task_storage::get_task_by_index}}, define_syscall_group};
+use crate::{arch::amd64::{capability_sys::{cap_resolver::{resolve_channel, resolve_port}, capability::{CapType, Capability, Rights}, cnode::CapIdx}, ipc::port::{Port, PortAction, PortErr}, scheduler::{block_current_task, syscall::{SyscallArguments, SyscallError, get_curr_exec_ctx}, task::{Process, ThreadRegisters, Tid}, task_storage::{get_thread, wake_thread}}}, define_syscall_group};
 
 define_syscall_group! {
     pub enum PortSyscallNumbers {
-        PortCreate    = 19,
-        PortClose     = 20,
-        PortBind      = 21,
-        PortUnbind    = 22,
-        PortWait      = 23,
-        PortPoll      = 24,
+        PortCreate    = 40,
+        PortClose     = 41,
+        PortBind      = 42,
+        PortUnbind    = 43,
+        PortWait      = 44,
+        PortPoll      = 45,
     }
 }
 
-pub fn apply_port_action(action: PortAction) {
+fn apply_port_action(action: PortAction) {
     match action {
         PortAction::Continue => {}
         PortAction::Block { task_id } => {
-            if let Some(_) = get_task_by_index(task_id) {
+            if let Some(_) = get_thread(task_id) {
                 block_current_task();
             }
         }
         PortAction::Wake { task_id } => {
-            if let Some(task) = get_task_by_index(task_id) {
-                awaken_task(task);
+            if let Some(task) = get_thread(task_id) {
+                wake_thread(task.tid);
             }
         }
     }
 }
 
-pub fn resolve_port_cap(
-    task: &crate::arch::amd64::scheduler::task::Task,
-    cap_idx: u64,
-    required_rights: Rights,
-) -> Result<crate::arch::amd64::ipc::object_table::HandleRef, SyscallError> {
-    let (handle, _) = resolve_cap(task, cap_idx, KernelObjType::Port, required_rights)
-        .map_err(|e| e.to_syscall_error())?;
-    Ok(handle)
-}
+fn handle_port_create() -> Result<u64, SyscallError> {
+    let ctx = get_curr_exec_ctx();
 
-fn resolve_channel_cap(
-    task: &crate::arch::amd64::scheduler::task::Task,
-    cap_idx: u64,
-    required_rights: Rights,
-) -> Result<crate::arch::amd64::ipc::object_table::HandleRef, SyscallError> {
-    let (handle, _) = resolve_cap(task, cap_idx, KernelObjType::Channel, required_rights)
-        .map_err(|e| e.to_syscall_error())?;
-    Ok(handle)
-}
-
-fn handle_port_create(curr_task_id: u32) -> Result<u64, SyscallError> {
     let port = Port::new();
 
-    let handle = obj_insert(KernelObject::new(
-        KernelObjType::Port,
-        ObjData::Port(port),
-    )).map_err(|_| SyscallError::OutOfMemory)?;
+    let slot = ctx.1.cnode.alloc(Capability::new(CapType::Port(port), Rights::ALL));
 
-    let task = get_task_by_index(curr_task_id).ok_or(SyscallError::NotFound)?;
-    let cap  = Capability::new(handle, Rights::ALL);
-    let slot = task.tcb.cnode.lock()
-        .alloc(cap)
-        .ok_or(SyscallError::ResourceExhausted)? as u64;
-
-    Ok(slot)
+    Ok(slot as u64)
 }
 
-fn handle_port_close(curr_task_id: u32, cap_idx: u64) -> Result<u64, SyscallError> {
-    let task   = get_task_by_index(curr_task_id).ok_or(SyscallError::NotFound)?;
-    let handle = resolve_port_cap(&task, cap_idx, Rights::ALL)?;
+fn handle_port_close(cap_idx: CapIdx) -> Result<u64, SyscallError> {
+    let ctx = get_curr_exec_ctx();
 
-    let action = with_object(handle, |obj| {
-        match &obj.data {
-            ObjData::Port(port) => Some(port.close()),
-            _ => None,
-        }
-    })
-    .flatten()
-    .ok_or(SyscallError::InvalidArgument)?;
+    let port_obj = resolve_port(&ctx.1.cnode, cap_idx, Rights::DESTROY).map_err(|err| err.to_syscall_error())?;
+
+    let action = port_obj.0.close();
 
     apply_port_action(action);
 
-    obj_remove(handle).map_err(|_| SyscallError::NotFound)?;
-    task.tcb.cnode.lock().delete(cap_idx as u32);
+    ctx.1.cnode.delete(cap_idx);
 
     Ok(0)
 }
 
 fn handle_port_bind(
-    curr_task_id: u32,
-    port_cap_idx: u64,
-    ch_cap_idx: u64,
+    port_cap_idx: CapIdx,
+    ch_cap_idx: CapIdx,
     key: u64,
 ) -> Result<u64, SyscallError> {
-    let task = get_task_by_index(curr_task_id).ok_or(SyscallError::NotFound)?;
+    let ctx = get_curr_exec_ctx();
 
-    let port_handle = resolve_port_cap(&task, port_cap_idx, Rights::WRITE)?;
-    let ch_handle   = resolve_channel_cap(&task, ch_cap_idx, Rights::READ)?;
+    let port_obj = resolve_port(&ctx.1.cnode, port_cap_idx, Rights::WRITE & Rights::READ).map_err(|err| err.to_syscall_error())?;
+    let channel_obj = resolve_channel(&ctx.1.cnode, ch_cap_idx, Rights::WRITE & Rights::READ).map_err(|err| err.to_syscall_error())?;
 
-    let port_arc = with_object(port_handle, |obj| {
-        match &obj.data {
-            ObjData::Port(p) => Some(p.clone()),
-            _ => None,
-        }
-    })
-    .flatten()
-    .ok_or(SyscallError::InvalidArgument)?;
-
-    with_object_mut(ch_handle, |obj| {
-        match &mut obj.data {
-            ObjData::Channel(ch) => {
-                ch.bind_port(port_arc, key);
-                Some(())
-            }
-            _ => None,
-        }
-    })
-    .flatten()
-    .ok_or(SyscallError::InvalidArgument)?;
+    channel_obj.0.bind_port(port_obj.0.clone(), key);
 
     Ok(0)
 }
 
 fn handle_port_unbind(
-    curr_task_id: u32,
-    port_cap_idx: u64,
-    ch_cap_idx: u64,
+    port_cap_idx: CapIdx,
+    ch_cap_idx: CapIdx,
 ) -> Result<u64, SyscallError> {
-    let task      = get_task_by_index(curr_task_id).ok_or(SyscallError::NotFound)?;
-    let ch_handle = resolve_channel_cap(&task, ch_cap_idx, Rights::READ)?;
+    let ctx = get_curr_exec_ctx();
 
-    let _ = resolve_port_cap(&task, port_cap_idx, Rights::WRITE)?;
+    resolve_port(&ctx.1.cnode, port_cap_idx, Rights::WRITE).map_err(|err| err.to_syscall_error())?;
+    let channel_obj = resolve_channel(&ctx.1.cnode, ch_cap_idx, Rights::WRITE).map_err(|err| err.to_syscall_error())?;
 
-    with_object_mut(ch_handle, |obj| {
-        match &mut obj.data {
-            ObjData::Channel(ch) => {
-                ch.unbind_port();
-                Some(())
-            }
-            _ => None,
-        }
-    })
-    .flatten()
-    .ok_or(SyscallError::InvalidArgument)?;
+    channel_obj.0.unbind_port();
 
     Ok(0)
 }
 
 fn handle_port_wait(
-    curr_task_id: u32,
-    port_cap_idx: u64,
+    port_cap_idx: CapIdx,
     _timeout_ns: u64,
-    regs: &mut TaskRegisters,
+    regs: &mut ThreadRegisters,
 ) -> Result<u64, SyscallError> {
-    let task        = get_task_by_index(curr_task_id).ok_or(SyscallError::NotFound)?;
-    let port_handle = resolve_port_cap(&task, port_cap_idx, Rights::READ)?;
+    let ctx = get_curr_exec_ctx();
 
-    let result = with_object(port_handle, |obj| {
-        match &obj.data {
-            ObjData::Port(port) => Some(port.wait(curr_task_id)),
-            _ => None,
-        }
-    })
-    .flatten()
-    .ok_or(SyscallError::InvalidArgument)?;
+    let port_obj = resolve_port(&ctx.1.cnode, port_cap_idx, Rights::READ).map_err(|err| err.to_syscall_error())?;
+    let result = port_obj.0.wait(ctx.0.tid);
 
     match result {
         Ok(packet) => {
@@ -196,21 +123,14 @@ fn handle_port_wait(
 }
 
 fn handle_port_poll(
-    curr_task_id: u32,
-    port_cap_idx: u64,
-    regs: &mut TaskRegisters,
+    port_cap_idx: CapIdx,
+    regs: &mut ThreadRegisters,
 ) -> Result<u64, SyscallError> {
-    let task        = get_task_by_index(curr_task_id).ok_or(SyscallError::NotFound)?;
-    let port_handle = resolve_port_cap(&task, port_cap_idx, Rights::READ)?;
+    let ctx = get_curr_exec_ctx();
 
-    let packet = with_object(port_handle, |obj| {
-        match &obj.data {
-            ObjData::Port(port) => Some(port.poll()),
-            _ => None,
-        }
-    })
-    .flatten()
-    .ok_or(SyscallError::InvalidArgument)?;
+    let port_obj = resolve_port(&ctx.1.cnode, port_cap_idx, Rights::READ).map_err(|err| err.to_syscall_error())?;
+
+    let packet = port_obj.0.poll();
 
     match packet {
         Some(p) => {
@@ -229,28 +149,27 @@ fn handle_port_poll(
 
 pub fn dispatch_port_syscall_group(
     syscall: PortSyscallNumbers,
-    curr_task_id: u32,
     args: &SyscallArguments,
-    regs: &mut TaskRegisters,
+    regs: &mut ThreadRegisters,
 ) -> Result<u64, SyscallError> {
     match syscall {
         PortSyscallNumbers::PortCreate => {
-            handle_port_create(curr_task_id)
+            handle_port_create()
         }
         PortSyscallNumbers::PortClose => {
-            handle_port_close(curr_task_id, args.arg1)
+            handle_port_close(args.arg1 as u32)
         }
         PortSyscallNumbers::PortBind => {
-            handle_port_bind(curr_task_id, args.arg1, args.arg2, args.arg3)
+            handle_port_bind(args.arg1 as u32, args.arg2 as u32, args.arg3)
         }
         PortSyscallNumbers::PortUnbind => {
-            handle_port_unbind(curr_task_id, args.arg1, args.arg2)
+            handle_port_unbind(args.arg1 as u32, args.arg2 as u32)
         }
         PortSyscallNumbers::PortWait => {
-            handle_port_wait(curr_task_id, args.arg1, args.arg2, regs)
+            handle_port_wait(args.arg1 as u32, args.arg2, regs)
         }
         PortSyscallNumbers::PortPoll => {
-            handle_port_poll(curr_task_id, args.arg1, regs)
+            handle_port_poll(args.arg1 as u32, regs)
         }
     }
 }

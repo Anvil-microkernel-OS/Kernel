@@ -3,7 +3,7 @@ use core::{sync::atomic::{AtomicU8, Ordering}};
 use limine::{mp::Cpu, response::MpResponse};
 use x86_64::{VirtAddr, instructions};
 
-use crate::{arch::amd64::{apic::init_lapic, cpu::smp::percpu::{PerCpuRegion, get_percpu_regions_ammo, get_region_by_id, set_gsbase_for_percpu_region}, gdt::setup_gdt_for_local_core, interrupts::idt::init_idt, memory::u_k_boundary::uaccsess::enable_smep, scheduler::init_scheduler_percpu}, bootinfo::BootInfo, early_println};
+use crate::{arch::amd64::{CPUID_INFO, apic::init_lapic, cpu::smp::percpu::{PerCpuRegion, get_percpu_regions_ammo, get_region_by_id, set_gsbase_for_percpu_region}, gdt::setup_gdt_for_local_core, interrupts::idt::init_idt, memory::u_k_boundary::uaccsess::enable_smep, scheduler::init_scheduler_percpu}, bootinfo::BootInfo, early_println};
 
 static NUM_CPUS_BOOTSTRAPPED: AtomicU8 = AtomicU8::new(0);
 
@@ -66,7 +66,7 @@ unsafe extern "C" fn start_ap(info: &Cpu) -> ! {
     setup_gdt_for_local_core();
     enable_smep();
     init_idt();
-    init_lapic();
+    init_lapic(CPUID_INFO.get().unwrap().has_x2apic);
     NUM_CPUS_BOOTSTRAPPED.fetch_add(1, Ordering::Release);
     instructions::interrupts::enable();
     init_scheduler_percpu();

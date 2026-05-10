@@ -1,4 +1,9 @@
-use crate::arch::amd64::memory::pmm::HHDM_OFFSET;
+use x86_64::VirtAddr;
+
+use crate::arch::amd64::memory::{pmm::HHDM_OFFSET};
+
+pub mod paging;
+pub mod addr;
 
 #[inline]
 pub const fn align_up(x: usize, a: usize) -> usize {
@@ -35,6 +40,11 @@ pub fn pages_to_order(pages: usize) -> usize {
         order += 1;
     }
     order
+}
+
+pub fn is_user_space_addr(va: VirtAddr) -> bool {
+    // On x86-64: canonical userspace это 0x0000000000000000 — 0x00007FFFFFFFFFFF
+    va.as_u64() < 0x0000_8000_0000_0000
 }
 
 pub struct HumanSize {

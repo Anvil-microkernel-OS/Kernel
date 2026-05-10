@@ -193,6 +193,7 @@ $(IMAGE_NAME).iso: limine/limine kernel init_srvs
 	cp -v $(INIT_SRVS) iso_root/boot/
 	mkdir -p iso_root/boot/limine
 	cp -v boot/limine/limine.conf iso_root/boot/limine/
+	cp -v boot/logo.bmp iso_root/boot/
 	mkdir -p iso_root/EFI/BOOT
 ifeq ($(KARCH),x86_64)
 	cp -v limine/limine-bios.sys limine/limine-bios-cd.bin limine/limine-uefi-cd.bin iso_root/boot/limine/

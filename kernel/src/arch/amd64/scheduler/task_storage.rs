@@ -1,31 +1,67 @@
+use core::sync::atomic::Ordering;
+
 use alloc::{collections::{VecDeque, btree_map::BTreeMap}, sync::Arc};
 use spin::{Mutex, Once};
-use crate::{arch::amd64::scheduler::task::{Task, TaskId}};
+use crate::arch::amd64::scheduler::task::{Pid, Process, Thread, ThreadState, Tid};
 
-pub struct TaskTable {
-    pub tasks: Mutex<BTreeMap<TaskId, Arc<Task>>>,
+pub struct ProcessTable {
+    inner: Mutex<BTreeMap<Pid, Arc<Process>>>,
 }
 
-impl TaskTable {
+impl ProcessTable {
     pub fn new() -> Self {
-        Self { tasks: Mutex::new(BTreeMap::new()) }
+        Self { inner: Mutex::new(BTreeMap::new()) }
     }
 
-    pub fn insert(&self, task: Arc<Task>) {
-        self.tasks.lock().insert(task.id, task);
+    pub fn insert(&self, process: Arc<Process>) {
+        self.inner.lock().insert(process.pid, process);
     }
 
-    pub fn get_by_index(&self, idx: TaskId) -> Option<Arc<Task>> {
-        self.tasks.lock().get(&idx).cloned()
+    pub fn get(&self, pid: Pid) -> Option<Arc<Process>> {
+        self.inner.lock().get(&pid).cloned()
     }
 
-    pub fn remove(&self, idx: TaskId) {
-        self.tasks.lock().remove(&idx);
+    pub fn remove(&self, pid: Pid) -> Option<Arc<Process>> {
+        self.inner.lock().remove(&pid)
+    }
+
+    pub fn for_each<F: FnMut(&Arc<Process>)>(&self, mut f: F) {
+        for proc in self.inner.lock().values() {
+            f(proc);
+        }
+    }
+}
+
+pub struct ThreadTable {
+    pub inner: Mutex<BTreeMap<Tid, Arc<Thread>>>,
+}
+
+impl ThreadTable {
+    pub fn new() -> Self {
+        Self { inner: Mutex::new(BTreeMap::new()) }
+    }
+
+    pub fn insert(&self, thread: Arc<Thread>) {
+        self.inner.lock().insert(thread.tid, thread);
+    }
+
+    pub fn get(&self, tid: Tid) -> Option<Arc<Thread>> {
+        self.inner.lock().get(&tid).cloned()
+    }
+
+    pub fn remove(&self, tid: Tid) -> Option<Arc<Thread>> {
+        self.inner.lock().remove(&tid)
+    }
+
+    pub fn for_each<F: FnMut(&Arc<Thread>)>(&self, mut f: F) {
+        for thread in self.inner.lock().values() {
+            f(thread);
+        }
     }
 }
 
 pub struct GlobalRunQueue {
-    inner: Mutex<VecDeque<Arc<Task>>>,
+    inner: Mutex<VecDeque<Arc<Thread>>>,
 }
 
 impl GlobalRunQueue {
@@ -33,72 +69,104 @@ impl GlobalRunQueue {
         Self { inner: Mutex::new(VecDeque::new()) }
     }
 
-    pub fn push(&self, task: Arc<Task>) {
-        self.inner.lock().push_back(task);
+    pub fn push(&self, thread: Arc<Thread>) {
+        self.inner.lock().push_back(thread);
     }
 
-    pub fn pop(&self) -> Option<Arc<Task>> {
+    pub fn pop(&self) -> Option<Arc<Thread>> {
         self.inner.lock().pop_front()
     }
 
     pub fn is_empty(&self) -> bool {
         self.inner.lock().is_empty()
     }
+
+    pub fn steal_into(&self, buf: &mut [Option<Arc<Thread>>]) -> usize {
+        let mut q = self.inner.lock();
+        let mut count = 0;
+        while count < buf.len() {
+            match q.pop_front() {
+                Some(t) => { buf[count] = Some(t); count += 1; }
+                None    => break,
+            }
+        }
+        count
+    }
 }
 
-static TASK_TABLE:        Once<TaskTable>      = Once::new();
-static GLOBAL_RUN_QUEUE:  Once<GlobalRunQueue> = Once::new();
+static PROCESS_TABLE:    Once<ProcessTable>    = Once::new();
+static THREAD_TABLE:     Once<ThreadTable>     = Once::new();
+static GLOBAL_RUN_QUEUE: Once<GlobalRunQueue>  = Once::new();
 
-#[inline] pub fn table() -> &'static TaskTable      { TASK_TABLE.get().expect("task table not initialized") }
-#[inline] pub fn global_queue() -> &'static GlobalRunQueue { GLOBAL_RUN_QUEUE.get().expect("global run queue not initialized") }
+#[inline] pub fn process_table()  -> &'static ProcessTable   { PROCESS_TABLE.get().expect("process table not initialized") }
+#[inline] pub fn thread_table()   -> &'static ThreadTable    { THREAD_TABLE.get().expect("thread table not initialized") }
+#[inline] pub fn global_queue()   -> &'static GlobalRunQueue { GLOBAL_RUN_QUEUE.get().expect("global run queue not initialized") }
 
 pub fn initialize_task_storage() {
-    TASK_TABLE.call_once(TaskTable::new);
-    GLOBAL_RUN_QUEUE.call_once(|| GlobalRunQueue::new());
+    PROCESS_TABLE.call_once(ProcessTable::new);
+    THREAD_TABLE.call_once(ThreadTable::new);
+    GLOBAL_RUN_QUEUE.call_once(GlobalRunQueue::new);
 }
 
-pub fn add_task_to_execute(task: Arc<Task>) -> TaskId {
-    let id = task.id;
-    table().insert(task.clone());
-    global_queue().push(task);
-    id
+pub fn register_process(process: Arc<Process>) -> Pid {
+    let pid = process.pid;
+    process_table().insert(process);
+    pid
 }
 
-pub fn get_task_by_index(idx: TaskId) -> Option<Arc<Task>> {
-    table().get_by_index(idx)
+pub fn register_thread(thread: &Arc<Thread>) {
+    thread_table().insert(thread.clone());
 }
 
-pub fn remove_task(idx: TaskId) {
-    table().remove(idx);
+pub fn spawn_thread(thread: Arc<Thread>) -> Tid {
+    let tid = thread.tid;
+    global_queue().push(thread);
+    tid
 }
 
-pub fn inject_sleeping_task(idx: TaskId) {
-    if let Some(task) = table().get_by_index(idx) {
-        global_queue().push(task);
+pub fn get_process(pid: Pid) -> Option<Arc<Process>> {
+    process_table().get(pid)
+}
+
+pub fn get_thread(tid: Tid) -> Option<Arc<Thread>> {
+    thread_table().get(tid)
+}
+
+pub fn wake_thread(tid: Tid) {
+    if let Some(thread) = thread_table().get(tid) {
+        thread.state.store(ThreadState::Ready, Ordering::Release);
+        global_queue().push(thread);
     }
 }
 
-pub fn steal_from_global(buf: &mut [Option<Arc<Task>>]) -> usize {
-    let mut count = 0;
-    while count < buf.len() {
-        match global_queue().pop() {
-            Some(t) => { buf[count] = Some(t); count += 1; }
-            None    => break,
+pub fn reap_thread(tid: Tid) {
+    let Some(thread) = thread_table().remove(tid) else { return };
+
+    let Some(proc) = thread.parent_proc.read().upgrade() else { return };
+
+    {
+        let mut threads = proc.threads.lock();
+        threads.retain(|w| w.upgrade().map(|t| t.tid != tid).unwrap_or(false));
+
+        if threads.is_empty() {
+            drop(threads); 
+            process_table().remove(proc.pid);
         }
     }
-    count
+}
+
+pub fn steal_from_global(buf: &mut [Option<Arc<Thread>>]) -> usize {
+    global_queue().steal_into(buf)
 }
 
 pub fn global_queue_empty() -> bool {
     global_queue().is_empty()
 }
 
-pub fn for_each_task<F>(mut f: F)
-where
-    F: FnMut(&Arc<Task>),
-{
-    let tasks = table().tasks.lock();
-    for task in tasks.values() {
-        f(task);
-    }
+pub fn for_each_thread<F: FnMut(&Arc<Thread>)>(f: F) {
+    thread_table().for_each(f);
+}
+
+pub fn for_each_process<F: FnMut(&Arc<Process>)>(f: F) {
+    process_table().for_each(f);
 }

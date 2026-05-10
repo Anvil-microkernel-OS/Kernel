@@ -3,7 +3,7 @@ use core::sync::atomic::{AtomicBool, Ordering};
 use alloc::{collections::vec_deque::VecDeque, sync::Arc, vec::Vec};
 use spin::Mutex;
 
-use crate::{arch::amd64::{ipc::{cnode::CapIdx, port::{Port, PortAction, PortEvent, PortPacket}}, scheduler::task::TaskId}};
+use crate::arch::amd64::{capability_sys::cnode::CapIdx, ipc::port::{Port, PortAction, PortEvent, PortPacket}, scheduler::task::Tid};
 
 pub struct ChannelMessage {
     pub label: u64,
@@ -22,9 +22,9 @@ pub enum MsgPayload {
 #[derive(Debug)]
 pub enum ChannelAction {
     Continue,
-    Block { task_id: TaskId },
-    Wake { task_id: TaskId },
-    WakeAndBlock { wake: TaskId, block: TaskId },
+    Block { task_id: Tid },
+    Wake { task_id: Tid },
+    WakeAndBlock { wake: Tid, block: Tid },
 }
 
 pub enum ChannelErr {
@@ -39,7 +39,7 @@ const QUEUE_LIMIT: usize = 64;
 
 struct ChannelInner {
     queue:       VecDeque<ChannelMessage>,
-    waiter:      Option<TaskId>,
+    waiter:      Option<Tid>,
     peer_closed: bool,
 }
 
@@ -101,7 +101,7 @@ impl ChannelEnd {
         })
     }
 
-    fn pop(&self, current_task: TaskId) -> Result<(ChannelMessage, ChannelAction), ChannelErr> {
+    fn pop(&self, current_thread: Tid) -> Result<(ChannelMessage, ChannelAction), ChannelErr> {
         let mut inner = self.inner.lock();
 
         if let Some(msg) = inner.queue.pop_front() {
@@ -112,8 +112,8 @@ impl ChannelEnd {
             return Err(ChannelErr::PeerClosed);
         }
 
-        inner.waiter = Some(current_task);
-        Err(ChannelErr::WouldBlock(ChannelAction::Block { task_id: current_task }))
+        inner.waiter = Some(current_thread);
+        Err(ChannelErr::WouldBlock(ChannelAction::Block { task_id: current_thread }))
     }
 
     fn notify_peer_closed(&self) -> ChannelAction {
@@ -146,6 +146,7 @@ impl ChannelEnd {
     }
 }
 
+#[derive(Clone)]
 pub struct ChannelHandle {
     own_end:  Arc<ChannelEnd>,
     peer_end: Arc<ChannelEnd>,
@@ -176,15 +177,15 @@ impl ChannelHandle {
 
     pub fn read(
         &self,
-        current_task: TaskId,
+        current_thread: Tid,
     ) -> Result<(ChannelMessage, ChannelAction), ChannelErr> {
-        self.own_end.pop(current_task)
+        self.own_end.pop(current_thread)
     }
 
     pub fn call(
         &self,
         mut msg: ChannelMessage,
-        current_task: TaskId,
+        current_task: Tid,
         register_cap: impl FnOnce(ChannelHandle) -> CapIdx,
     ) -> Result<(ChannelHandle, ChannelAction), ChannelErr> {
         if self.own_end.closed.load(Ordering::Acquire) {

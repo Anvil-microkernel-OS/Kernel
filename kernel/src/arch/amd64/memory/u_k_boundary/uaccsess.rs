@@ -41,6 +41,36 @@ where T: Copy
     true
 }
 
+pub fn copy_slice_to_user<T>(ptr: usize, slice: &[T]) -> bool
+where T: Copy
+{
+    let total = core::mem::size_of::<T>() * slice.len();
+    if !validate_user_ptr(ptr, total) {
+        return false;
+    }
+    unsafe {
+        core::arch::asm!("stac", options(nostack, preserves_flags));
+        core::ptr::copy_nonoverlapping(slice.as_ptr(), ptr as *mut T, slice.len());
+        core::arch::asm!("clac", options(nostack, preserves_flags));
+    }
+    true
+}
+
+pub fn copy_slice_from_user<T>(ptr: usize, slice: &mut [T]) -> bool
+where T: Copy
+{
+    let total = core::mem::size_of::<T>() * slice.len();
+    if !validate_user_ptr(ptr, total) {
+        return false;
+    }
+    unsafe {
+        core::arch::asm!("stac", options(nostack, preserves_flags));
+        core::ptr::copy_nonoverlapping(ptr as *mut T, slice.as_ptr() as *mut T, slice.len());
+        core::arch::asm!("clac", options(nostack, preserves_flags));
+    }
+    true
+}
+
 fn validate_user_ptr(ptr: usize, size: usize) -> bool {
     if ptr == 0
         || ptr % core::mem::align_of::<u8>() != 0 

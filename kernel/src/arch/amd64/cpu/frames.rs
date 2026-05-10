@@ -36,7 +36,7 @@ impl fmt::Display for InterruptFrame {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         writeln!(
             f,
-            "=== Interrupt Frame =================================="
+            "=====================Interrupt Frame==================="
         )?;
 
         writeln!(

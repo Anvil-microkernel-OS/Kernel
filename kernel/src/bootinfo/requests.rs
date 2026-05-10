@@ -1,4 +1,4 @@
-use limine::{BaseRevision, request::{ExecutableCmdlineRequest, FramebufferRequest, HhdmRequest, MemoryMapRequest, ModuleRequest, MpRequest, RequestsEndMarker, RequestsStartMarker, RsdpRequest}};
+use limine::{BaseRevision, mp::RequestFlags, request::{ExecutableCmdlineRequest, FramebufferRequest, HhdmRequest, MemoryMapRequest, ModuleRequest, MpRequest, RequestsEndMarker, RequestsStartMarker, RsdpRequest}};
 
 #[used]
 #[unsafe(link_section = ".requests")]
@@ -26,7 +26,7 @@ pub static CMD_REQUEST: ExecutableCmdlineRequest = ExecutableCmdlineRequest::new
 
 #[used]
 #[unsafe(link_section = ".requests")]
-pub static SMP_REQUEST: MpRequest = MpRequest::new();
+pub static SMP_REQUEST: MpRequest = MpRequest::new().with_flags(RequestFlags::X2APIC);
 
 #[used]
 #[unsafe(link_section = ".requests")]

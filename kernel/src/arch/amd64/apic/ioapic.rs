@@ -1,5 +1,5 @@
 use bitfield_struct::bitfield;
-use x86_64::{VirtAddr, structures::paging::{Page, PageTableFlags, Size4KiB}};
+use x86_64::{PhysAddr, VirtAddr, structures::paging::{Page, PageTableFlags, Size4KiB}};
 
 use crate::{arch::amd64::{acpi::{get_acpi_tables, madt::MadTable}, memory::{misc::phys_to_virt, vmm::kmap_mmio_page}}, misc::registers::RegisterRW, register_struct};
 
@@ -15,7 +15,7 @@ pub struct IOAPICID {
     __reserved: u8,
 }
 
-const IOAPIC_REDIRECTION_TABLE_REGISTER_OFFSET: u8 = 0x10;
+pub const IOAPIC_REDIRECTION_TABLE_REGISTER_OFFSET: u8 = 0x10;
 
 #[bitfield(u64)]
 pub struct IOAPICRedirectionTableRegister {
@@ -33,6 +33,15 @@ pub struct IOAPICRedirectionTableRegister {
     pub destination_field: u8,
 }
 
+const IOAPIC_VER_REGISTER_OFFSET: u8 = 0x01;
+#[bitfield(u32)]
+pub struct IOAPICVer {
+    pub apic_version: u8,
+    __reserved0: u8,
+    pub max_redirection_entry: u8,
+    __reserved1: u8,
+}
+
 register_struct! {
     IOApicRegisters {
         0x00 => io_reg_select: RegisterRW<u8>,
@@ -43,15 +52,13 @@ register_struct! {
 pub struct IOApic {
     id: u8,
     gsi_base: u32,
-    registers: IOApicRegisters
+    registers: IOApicRegisters,
+    num_redir_entries: u32,
 }
 
 impl IOApic {
-    pub fn new() -> Self {
-        let acpi = get_acpi_tables().read();
-        let ioapic = acpi.get_table::<MadTable>().unwrap().ioapics.get(0).unwrap();
-        
-        let ioapic_converted = VirtAddr::new(phys_to_virt(ioapic.address.as_u64() as usize) as u64);
+    pub fn new(id: u8, gsi_base: u32, regs_phys_addr: PhysAddr) -> Self {
+        let ioapic_converted = VirtAddr::new(phys_to_virt(regs_phys_addr.as_u64() as usize) as u64);
 
         let page = Page::<Size4KiB>::containing_address(ioapic_converted);
         let aligned_virt_addr = page.start_address();
@@ -60,15 +67,31 @@ impl IOApic {
             | PageTableFlags::WRITABLE 
             | PageTableFlags::NO_CACHE;
         
-        kmap_mmio_page(aligned_virt_addr, ioapic.address, flags);
+        kmap_mmio_page(aligned_virt_addr, regs_phys_addr, flags);
 
         let registers = unsafe { IOApicRegisters::from_address(aligned_virt_addr.as_u64() as usize) };
 
+        registers.io_reg_select().write(IOAPIC_VER_REGISTER_OFFSET);
+        let ver_raw = registers.io_window().read();
+        let ver = IOAPICVer::from(ver_raw);
+        let num_redir_entries = ver.max_redirection_entry() as u32 + 1;
+
         Self {
-            id: ioapic.id,
-            gsi_base: ioapic.gsi_base,
-            registers
+            id,
+            gsi_base,
+            registers,
+            num_redir_entries
         }
+    }
+
+    
+    pub fn num_redir_entries(&self) -> u32 {
+        self.num_redir_entries
+    }
+
+    pub fn ioapic_ver(&self) -> IOAPICVer {
+        let raw = self.read_32b_from_reg(IOAPIC_VER_REGISTER_OFFSET);
+        IOAPICVer::from(raw)
     }
 
     pub fn read_32b_from_reg(&self, reg: u8) -> u32 {
@@ -78,8 +101,8 @@ impl IOApic {
 
     pub fn read_64b_from_reg(&self, reg: u8) -> u64 {
         let low = self.read_32b_from_reg(reg);
-        let hight = self.read_32b_from_reg(reg + 1);
-        (u64::from(hight) << 32) | u64::from(low)
+        let high = self.read_32b_from_reg(((reg as u16) + 1) as u8);
+        (u64::from(high) << 32) | u64::from(low)
     }
 
     pub fn write_32b_to_reg(&self, register: u8, value: u32) {
@@ -99,24 +122,36 @@ impl IOApic {
         IOAPICID::from(raw)
     }
 
-    pub fn unmask_irq(&self, gsi: u8) {
-        let offset = IOAPIC_REDIRECTION_TABLE_REGISTER_OFFSET + (gsi * 2);
-        let raw = self.read_64b_from_reg(offset as u8);
+    fn set_pin_mask(&self, pin: u8, masked: bool) {
+        assert!((pin as u32) < self.num_redir_entries(), "pin out of range");
+        let reg_index = IOAPIC_REDIRECTION_TABLE_REGISTER_OFFSET + pin * 2;
+        let raw = self.read_64b_from_reg(reg_index);
         let mut entry = IOAPICRedirectionTableRegister::from(raw);
-        entry.set_interrupt_mask(false);
-        self.write_ioredtbl(gsi, entry);
+        entry.set_interrupt_mask(masked);
+        self.write_ioredtbl(pin, entry);
     }
 
-    pub fn mask_irq(&self, gsi: u8) {
-        let offset = IOAPIC_REDIRECTION_TABLE_REGISTER_OFFSET + (gsi * 2);
-        let raw = self.read_64b_from_reg(offset as u8);
-        let mut entry = IOAPICRedirectionTableRegister::from(raw);
-        entry.set_interrupt_mask(true);
-        self.write_ioredtbl(gsi, entry);
+    pub fn mask_pin(&self, pin: u8)   { self.set_pin_mask(pin, true);  }
+    pub fn unmask_pin(&self, pin: u8) { self.set_pin_mask(pin, false); }
+
+    pub fn handles_gsi(&self, gsi: u32) -> bool {
+        gsi >= self.gsi_base && gsi < self.gsi_base + self.num_redir_entries()
+    }
+
+    pub fn gsi_to_pin(&self, gsi: u32) -> Option<u8> {
+        if self.handles_gsi(gsi) {
+            Some((gsi - self.gsi_base) as u8)
+        } else {
+            None
+        }
     }
 
     pub fn write_ioredtbl(&self, entry: u8, value: IOAPICRedirectionTableRegister) {
-        assert!(entry < 24, "Intel IOAPIC only has 24 entries!");
+        assert!(
+            (entry as u32) < self.num_redir_entries,
+            "IOAPIC entry {} >= num_redir_entries {}",
+            entry, self.num_redir_entries
+        );
         let offset = IOAPIC_REDIRECTION_TABLE_REGISTER_OFFSET + (entry * 2);
         self.write_64b_to_reg(offset, value.into());
     }

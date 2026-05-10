@@ -1,28 +1,37 @@
 use core::arch::naked_asm;
 
+use alloc::{format, sync::Arc};
 use spin::Mutex;
 use x86_64::{VirtAddr, registers::{control::{Efer, EferFlags}, model_specific::{LStar, SFMask}, rflags::RFlags}};
 
-use crate::{arch::amd64::{gdt::{USER_CODE_SELECTOR, USER_DATA_SELECTOR}, scheduler::{PerCpuSchedulerData, syscall::{cap_handler::CapSyscallNumbers, interrupts::IrqSyscallNumbers, io_ports::IoPortSyscallNumbers, memory_handler::MemorySyscallNumbers, messaging::{channel::ChannelSyscallNumbers, port::PortSyscallNumbers}, tcb::TcbSyscallNumbers, thread_handler::ThreadSyscallNums}, task::TaskRegisters}}, define_per_cpu_u64, early_print, early_println, register_syscall_groups};
+use crate::{arch::amd64::{gdt::{USER_CODE_SELECTOR, USER_DATA_SELECTOR}, scheduler::{PerCpuSchedulerData, syscall::{capability::action::CapabilityActionSyscalls, interrupts::action::IrqSyscallNumbers, io::IoPortSyscalls, memory::{vma::MemorySyscallNumbers, vmo::MemoryVmoSyscalls}, messaging::{channel::ChannelSyscallNumbers, port::PortSyscallNumbers}, processes::{action::ProcessActionSyscalls, info::ProcessInfoSyscalls}, threads::{actions::ThreadActionSyscalls, info::ThreadInfoSyscalls}}, task::{Process, Thread, ThreadRegisters}, task_storage::{get_process, get_thread}}}, define_per_cpu_u64, early_print, early_println, register_syscall_groups};
 
-mod memory_handler;
-mod thread_handler;
-mod cap_check;
-mod tcb;
-mod cap_handler;
-mod io_ports;
 pub mod syscall_groups;
 pub mod messaging;
 mod interrupts;
+mod threads;
+mod processes;
+mod memory;
+mod capability;
+mod io;
 
-use cap_handler::_SYSCALL_GROUP as CAP_SYSCALL_GROUP;
-use memory_handler::_SYSCALL_GROUP as MEMORY_SYSCALL_GROUP;
-use tcb::_SYSCALL_GROUP as TCB_SYSCALL_GROUP;
-use thread_handler::_SYSCALL_GROUP as THREAD_SYSCALL_GROUP;
-use messaging::channel::_SYSCALL_GROUP as MSG_CH_GROUP;
-use messaging::port::_SYSCALL_GROUP as MSG_PORT_GROUP;
-use io_ports::_SYSCALL_GROUP as IO_PORT_GROUP;
-use interrupts::_SYSCALL_GROUP as IRQ_GROUP;
+use threads::info::_SYSCALL_GROUP as THREAD_INFO_SYSCALL_GROUP;
+use threads::actions::_SYSCALL_GROUP as THREAD_ACTIONS_SYSCALL_GROUP;
+
+use processes::info::_SYSCALL_GROUP as PROC_INFO_SYSCALL_GROUP;
+use processes::action::_SYSCALL_GROUP as PROC_ACTION_SYSCALL_GROUP;
+
+use memory::vma::_SYSCALL_GROUP as MEMORY_VMA_SYSCALL_GROUP;
+use memory::vmo::_SYSCALL_GROUP as MEMORY_VMO_SYSCALL_GROUP;
+
+use capability::action::_SYSCALL_GROUP as CAPABILITY_ACTION_SYSCALL_GROUP;
+
+use interrupts::action::_SYSCALL_GROUP as IRQ_SYSCALL_GROUP;
+
+use io::_SYSCALL_GROUP as IO_PORTS_SYSCALL_GROUP;
+
+use messaging::channel::_SYSCALL_GROUP as MESSAGING_CHNL_SYSCALL_GROUP;
+use messaging::port::_SYSCALL_GROUP as MESSAGING_PORT_SYSCALL_GROUP;
 
 #[repr(i64)]
 pub (crate) enum SyscallError {
@@ -54,14 +63,17 @@ struct SyscallArguments {
 }
 
 register_syscall_groups! {
-    TCB_SYSCALL_GROUP,
-    MEMORY_SYSCALL_GROUP,
-    THREAD_SYSCALL_GROUP,
-    CAP_SYSCALL_GROUP,
-    MSG_CH_GROUP,
-    MSG_PORT_GROUP,
-    IO_PORT_GROUP,
-    IRQ_GROUP,
+    THREAD_INFO_SYSCALL_GROUP,
+    PROC_INFO_SYSCALL_GROUP,
+    THREAD_ACTIONS_SYSCALL_GROUP,
+    MEMORY_VMA_SYSCALL_GROUP,
+    MEMORY_VMO_SYSCALL_GROUP,
+    CAPABILITY_ACTION_SYSCALL_GROUP,
+    IRQ_SYSCALL_GROUP,
+    IO_PORTS_SYSCALL_GROUP,
+    MESSAGING_CHNL_SYSCALL_GROUP,
+    MESSAGING_PORT_SYSCALL_GROUP,
+    PROC_ACTION_SYSCALL_GROUP,
     &[25] // debug printf
 }
 
@@ -99,46 +111,67 @@ fn handle_debug_print(ptr: u64, len: u64) -> Result<u64, SyscallError> {
     Ok(0)
 }
 
-fn syscall_dispatcher(registers: &mut TaskRegisters, args: &SyscallArguments) -> u64 {
-    let curr_task_id = PerCpuSchedulerData::get().curr_task_id;
+pub (crate) fn get_curr_exec_ctx() -> (Arc<Thread>, Arc<Process>) {
+    let curr_tid = PerCpuSchedulerData::get().curr_thread_id;
+    let curr_thread = get_thread(curr_tid).expect(format!("FATAL ERROR: NO THREAD FOUND FOR TID: {}", curr_tid).as_str());
+    let curr_proc = curr_thread.parent_proc.read().upgrade().expect(format!("FATAL ERROR: NO PROCESS FOUND FROM TID: {}", curr_tid).as_str());
+
+    return (curr_thread, curr_proc)
+}
+
+fn syscall_dispatcher(registers: &mut ThreadRegisters, args: &SyscallArguments) -> u64 {
+    if let Ok(syscall) = ThreadInfoSyscalls::try_from(args.syscall_number) {
+        return threads::info::dispatch_thread_info_syscall_group(syscall, args)
+            .into_syscall_return();
+    }
+
+    if let Ok(syscall) = ThreadActionSyscalls::try_from(args.syscall_number) {
+        return threads::actions::dispatch_thread_actions_syscall_group(syscall, args)
+            .into_syscall_return();
+    }
+
+    if let Ok(syscall) = ProcessInfoSyscalls::try_from(args.syscall_number) {
+        return processes::info::dispatch_process_info_syscall_group(syscall, args)
+            .into_syscall_return();
+    }
+
+    if let Ok(syscall) = ProcessActionSyscalls::try_from(args.syscall_number) {
+        return processes::action::dispatch_process_action_syscalls(syscall, args)
+            .into_syscall_return();
+    }
 
     if let Ok(syscall) = MemorySyscallNumbers::try_from(args.syscall_number) {
-        return memory_handler::dispatch_memory_syscall_group(syscall, curr_task_id, args)
+        return memory::vma::dispatch_vma_memory_syscall_group(syscall, args)
             .into_syscall_return();
     }
 
-    if let Ok(syscall) = PortSyscallNumbers::try_from(args.syscall_number) {
-        return messaging::port::dispatch_port_syscall_group(syscall, curr_task_id, args, registers)
+    if let Ok(syscall) = MemoryVmoSyscalls::try_from(args.syscall_number) {
+        return memory::vmo::dispatch_vmo_memory_syscall_group(syscall, args)
             .into_syscall_return();
     }
 
-    if let Ok(syscall) = ChannelSyscallNumbers::try_from(args.syscall_number) {
-        return messaging::channel::dispatch_channel_syscall_group(syscall, curr_task_id, args, registers)
-            .into_syscall_return();
-    }
-
-    if let Ok(syscall) = ThreadSyscallNums::try_from(args.syscall_number) {
-        return thread_handler::dispatch_thread_syscall_group(syscall, curr_task_id, args)
-            .into_syscall_return();
-    }
-
-    if let Ok(syscall) = TcbSyscallNumbers::try_from(args.syscall_number) {
-        return tcb::dispatch_tcb_syscall_group(syscall, curr_task_id, args)
-            .into_syscall_return();
-    }
-
-    if let Ok(syscall) = CapSyscallNumbers::try_from(args.syscall_number) {
-        return cap_handler::dispatch_cap_syscall_group(syscall, curr_task_id, args)
-            .into_syscall_return();
-    }
-
-    if let Ok(syscall) = IoPortSyscallNumbers::try_from(args.syscall_number) {
-        return io_ports::dispatch_port_syscall_group(syscall, curr_task_id, args)
+    if let Ok(syscall) = CapabilityActionSyscalls::try_from(args.syscall_number) {
+        return capability::action::dispatch_capability_action_syscalls(syscall, args)
             .into_syscall_return();
     }
 
     if let Ok(syscall) = IrqSyscallNumbers::try_from(args.syscall_number) {
-        return interrupts::dispatch_irq_syscall_group(syscall, curr_task_id, args)
+        return interrupts::action::dispatch_irq_syscall_group(syscall, args)
+            .into_syscall_return();
+    }
+
+    if let Ok(syscall) = IoPortSyscalls::try_from(args.syscall_number) {
+        return io::dispatch_port_syscall_group(syscall, args)
+            .into_syscall_return();
+    }
+
+    if let Ok(syscall) = PortSyscallNumbers::try_from(args.syscall_number) {
+        return messaging::port::dispatch_port_syscall_group(syscall, args, registers)
+            .into_syscall_return();
+    }
+
+    if let Ok(syscall) = ChannelSyscallNumbers::try_from(args.syscall_number) {
+        return messaging::channel::dispatch_channel_syscall_group(syscall, args, registers)
             .into_syscall_return();
     }
 
@@ -146,7 +179,9 @@ fn syscall_dispatcher(registers: &mut TaskRegisters, args: &SyscallArguments) ->
         return handle_debug_print(args.arg1, args.arg2).into_syscall_return();
     }
 
-    early_println!("Unknown syscall: {} task={}", args.syscall_number, curr_task_id);
+    let ctx = get_curr_exec_ctx();
+
+    early_println!("Unknown syscall: {} tid={} pid={}", args.syscall_number, ctx.0.tid, ctx.1.pid);
     (SyscallError::InvalidHandle as i64) as u64
 }
 
@@ -241,7 +276,7 @@ pub(super) unsafe extern "C" fn syscall_handler() {
     )
 }
 
-extern "C" fn syscall_handler_inner(registers: &mut TaskRegisters) {
+extern "C" fn syscall_handler_inner(registers: &mut ThreadRegisters) {
     let args = SyscallArguments {
         syscall_number: registers.syscall_number_or_irq_or_error_code,
         arg1: registers.rdi,

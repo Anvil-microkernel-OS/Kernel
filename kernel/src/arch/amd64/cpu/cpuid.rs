@@ -2,6 +2,8 @@ use core::fmt;
 
 use raw_cpuid::CpuId;
 
+use crate::early_println;
+
 #[inline]
 fn vendor_as_str(vendor: &[u8; 12]) -> &str {
     str::from_utf8(vendor).unwrap_or("InvalidCPU")

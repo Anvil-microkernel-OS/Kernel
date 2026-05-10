@@ -5,6 +5,7 @@ pub mod pmm;
 pub mod vmm;
 pub mod u_k_boundary;
 mod mem_subsys_tests;
+pub mod vmo;
 
 pub struct MemoryInitInfo<'a> {
     pub hhdm_offset: u64,

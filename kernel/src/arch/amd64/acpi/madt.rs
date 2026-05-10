@@ -8,23 +8,23 @@ pub struct MadtCpuInfo {
     pub lapic_id: u8
 }
 
-pub struct MadtIoApicInfo {
-    pub id: u8,
-    pub address: PhysAddr,
-    pub gsi_base: u32,
-}
-
 pub struct MadtIrqOverride {
     pub irq: u8,
     pub gsi: u32,
     pub flags: u16,
 }
 
+pub struct MadtIoApicInfo {
+    pub id: u8,
+    pub address: PhysAddr,
+    pub gsi_base: u32,
+}
+
 pub struct MadTable {
     pub lapic_addr: PhysAddr,
     pub cpus: Vec<MadtCpuInfo>,
     pub ioapics: Vec<MadtIoApicInfo>,
-    pub irq_overrides: Vec<MadtIrqOverride>,
+    pub iso: Vec<MadtIrqOverride>,
 }
 
 impl AcpiParsedTable for MadTable {
@@ -57,8 +57,7 @@ impl AcpiParsedTable for MadTable {
                         address: PhysAddr::new(io.io_apic_address as u64),
                         gsi_base: io.global_system_interrupt_base,
                     });
-                }
-
+                },
                 MadtEntry::InterruptSourceOverride(iso) => {
                     irq_overrides.push(MadtIrqOverride {
                         irq: iso.irq,
@@ -66,7 +65,6 @@ impl AcpiParsedTable for MadTable {
                         flags: iso.flags,
                     });
                 }
-
                 _ => {}
             }
         }
@@ -75,7 +73,7 @@ impl AcpiParsedTable for MadTable {
             lapic_addr: PhysAddr::new(madt.local_apic_address as u64),
             cpus,
             ioapics,
-            irq_overrides
+            iso: irq_overrides,
         }
     }
 }

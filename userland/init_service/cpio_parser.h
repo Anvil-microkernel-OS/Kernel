@@ -46,7 +46,6 @@ static int streq(const char *a, const char *b) {
     return *a == *b;
 }
 
-// Проверяет, заканчивается ли строка a на суффикс b
 static int ends_with(const char *a, const char *b) {
     int alen = 0, blen = 0;
     const char *p;

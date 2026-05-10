@@ -70,6 +70,18 @@ impl Framebuffer {
         }
     }
 
+    pub fn clear_with_color(&mut self) {
+        unsafe {
+            for y in 0..self.height {
+                let row = core::slice::from_raw_parts_mut(
+                    self.buff_ptr.add(y * self.pitch) as *mut u32,
+                    self.width
+                );
+                row.fill(self.bg_color);
+            }
+        }
+    }
+
     pub fn scroll(&mut self, pixels: usize) {
         let line_bytes = self.pitch * pixels;
         let total_bytes = self.pitch * self.height;

@@ -1,17 +1,17 @@
 use core::{cell::UnsafeCell, sync::atomic::AtomicU64};
 
-use alloc::boxed::Box;
+use alloc::{boxed::Box, string::String, sync::Weak, vec::Vec};
 use atomic_enum::atomic_enum;
-use spin::Mutex;
-use x86_64::VirtAddr;
-use crate::arch::amd64::{gdt::IO_PORTS, ipc::cnode::CNode, scheduler::{addr_space::AddrSpace, stack::KernelStack}};
+use spin::{Mutex, RwLock};
+use crate::arch::amd64::{capability_sys::cnode::CNode, gdt::IO_PORTS, scheduler::{addr_space::AddrSpace, stack::KernelStack}};
 
-pub type TaskId = u32;
+pub type Pid = u32;
+pub type Tid = u32;
 
-
+#[derive(PartialEq)]
 #[atomic_enum]
 #[repr(u8)]
-pub enum TaskState {
+pub enum ThreadState {
     Running = 0,
     Ready = 1,
     Exiting = 2,
@@ -19,29 +19,32 @@ pub enum TaskState {
     Configuring = 4,
 }
 
-pub struct Task {
-    pub id: TaskId,
-    pub registers: UnsafeCell<TaskRegisters>,
-    pub tcb: Tcb
+pub struct Thread {
+    pub parent_proc: RwLock<Weak<Process>>,
+    pub tid: Tid,
+    pub wake_at_tick: AtomicU64,
+    pub kernel_stack: KernelStack,
+    pub registers: UnsafeCell<ThreadRegisters>,
+    pub state: AtomicThreadState,
 }
 
-pub struct Tcb {
-    pub wake_at_tick: Mutex<AtomicU64>,
+pub struct Process {
+    pub pid: Pid,
+    pub name: String,
+    pub threads: Mutex<Vec<Weak<Thread>>>,
     pub addr_space: Mutex<AddrSpace>,
-    pub kernel_stack: KernelStack,
-    pub cnode: Mutex<CNode>,
-    pub task_state: AtomicTaskState,
-
-    pub iopb_permissons: Mutex<Option<Box<[u8; IO_PORTS]>>>,
+    pub cnode: CNode,
+    pub iopb_permissions: Mutex<Option<Box<[u8; IO_PORTS]>>>,
     pub iopb_gen: AtomicU64,
 }
 
-unsafe impl Sync for Task {}
+unsafe impl Send for Thread {}
+unsafe impl Sync for Thread {}
 
 #[derive(Debug, Default)]
-#[repr(packed)]
+#[repr(C)]
 #[allow(dead_code)]
-pub struct TaskRegisters {
+pub struct ThreadRegisters {
     pub r15: u64,
     pub r14: u64,
     pub r13: u64,
@@ -67,5 +70,4 @@ pub struct TaskRegisters {
     pub rsp: u64,
     pub ss: u64,
 }
-
 

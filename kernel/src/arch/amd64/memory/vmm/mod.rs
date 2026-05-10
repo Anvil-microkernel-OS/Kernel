@@ -22,7 +22,6 @@ use crate::arch::amd64::memory::{
 };
 
 mod pf_handler;
-pub mod v_allocator;
 
 pub const PAGE_SIZE: usize = Size4KiB::SIZE as usize;
 
@@ -53,6 +52,21 @@ pub fn init_virtual_memory(hhdm_offset: u64) {
         let lvl4 = unsafe { get_active_pml4() };
         unsafe { Mutex::new(OffsetPageTable::new(lvl4, VirtAddr::new(hhdm_offset))) }
     });
+}
+
+pub fn update_page_flags(
+    page_table: &mut OffsetPageTable<'static>,
+    va: VirtAddr,
+    new_flags: PageTableFlags,
+) -> Result<(), &'static str> {
+    use x86_64::structures::paging::{Page, Mapper};
+    let page = Page::<Size4KiB>::containing_address(va);
+    unsafe {
+        page_table.update_flags(page, new_flags)
+            .map_err(|_| "update_flags failed")?
+            .flush();
+    }
+    Ok(())
 }
 
 pub fn map_mmio_region(phys: PhysAddr, size: usize) -> VirtAddr {

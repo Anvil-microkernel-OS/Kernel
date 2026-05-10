@@ -6,8 +6,6 @@
 
 #define SYS_IO_PORT_ENABLE 31
 #define SYS_IO_PORT_DISABLE 32
-#define SYS_IO_PORT_READ 33
-#define SYS_IO_PORT_WRITE 34
 
 static inline int64_t io_port_enable(uint64_t port) {
     return syscall1(SYS_IO_PORT_ENABLE, port);
@@ -15,14 +13,6 @@ static inline int64_t io_port_enable(uint64_t port) {
 
 static inline int64_t io_port_disable(uint64_t port) {
     return syscall1(SYS_IO_PORT_DISABLE, port);
-}
-
-static inline int64_t iopr_no_prot(uint64_t port, uint64_t val) {
-    return syscall2(SYS_IO_PORT_WRITE, port, val);
-}
-
-static inline int64_t iopw_no_prot(uint64_t port, uint64_t size) {
-    return syscall2(SYS_IO_PORT_READ, port, size);
 }
 
 static inline uint8_t inb(uint16_t port) {

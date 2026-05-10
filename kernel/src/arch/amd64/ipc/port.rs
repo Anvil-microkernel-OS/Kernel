@@ -1,7 +1,7 @@
 use alloc::{collections::vec_deque::VecDeque, sync::Arc};
 use spin::Mutex;
 
-use crate::arch::amd64::scheduler::task::TaskId;
+use crate::arch::amd64::scheduler::task::Tid;
 
 #[derive(Debug, Clone)]
 pub enum PortEvent {
@@ -20,8 +20,8 @@ pub struct PortPacket {
 #[derive(Debug)]
 pub enum PortAction {
     Continue,
-    Block  { task_id: TaskId },
-    Wake   { task_id: TaskId },
+    Block  { task_id: Tid },
+    Wake   { task_id: Tid },
 }
 
 
@@ -36,7 +36,7 @@ const PORT_QUEUE_LIMIT: usize = 256;
 
 struct PortInner {
     queue:  VecDeque<PortPacket>,
-    waiter: Option<TaskId>,
+    waiter: Option<Tid>,
     closed: bool,
 }
 
@@ -84,7 +84,7 @@ impl Port {
         self.inner.lock().queue.pop_front()
     }
 
-    pub fn wait(&self, current_task: TaskId) -> Result<PortPacket, PortErr> {
+    pub fn wait(&self, current_thread: Tid) -> Result<PortPacket, PortErr> {
         let mut inner = self.inner.lock();
 
         if let Some(packet) = inner.queue.pop_front() {
@@ -95,8 +95,8 @@ impl Port {
             return Err(PortErr::Closed);
         }
 
-        inner.waiter = Some(current_task);
-        Err(PortErr::WouldBlock(PortAction::Block { task_id: current_task }))
+        inner.waiter = Some(current_thread);
+        Err(PortErr::WouldBlock(PortAction::Block { task_id: current_thread }))
     }
 
     pub fn close(&self) -> PortAction {
