@@ -63,8 +63,8 @@ static inline int64_t get_tregs(uint64_t capability, general_purpose_registers_t
     return syscall2(SYS_THREAD_INFO_GET_REGS, capability, (uint64_t)regs);
 }
 
-static inline int64_t create_thread() {
-    return syscall0(SYS_THREAD_ACTION_CREATE);
+static inline int64_t create_thread(uint64_t capability) {
+    return syscall1(SYS_THREAD_ACTION_CREATE, capability);
 }
 
 static inline int64_t write_tregs(uint64_t capability, general_purpose_registers_t* regs) {

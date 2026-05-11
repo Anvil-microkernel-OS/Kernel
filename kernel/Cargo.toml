@@ -30,7 +30,7 @@ elf = {version = "0.8.0",  default-features = false}
 bitfield-struct = "0.12.1"
 atomic_enum = {version = "0.3", features = ["cas"] }
 bit_field = "0.10.3"
-
+intrusive-collections = "0.10.1"
 [dependencies.lazy_static]
 version = "1.0"
 features = ["spin_no_std"]

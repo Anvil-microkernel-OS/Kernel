@@ -26,6 +26,7 @@ mod misc;
 mod cpio_parser;
 mod core_messaging;
 mod panic;
+mod isolation;
 
 include!(concat!(env!("OUT_DIR"), "/kernel_version.rs"));
 

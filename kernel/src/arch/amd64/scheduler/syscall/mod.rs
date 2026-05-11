@@ -4,7 +4,7 @@ use alloc::{format, sync::Arc};
 use spin::Mutex;
 use x86_64::{VirtAddr, registers::{control::{Efer, EferFlags}, model_specific::{LStar, SFMask}, rflags::RFlags}};
 
-use crate::{arch::amd64::{gdt::{USER_CODE_SELECTOR, USER_DATA_SELECTOR}, scheduler::{PerCpuSchedulerData, syscall::{capability::action::CapabilityActionSyscalls, interrupts::action::IrqSyscallNumbers, io::IoPortSyscalls, memory::{vma::MemorySyscallNumbers, vmo::MemoryVmoSyscalls}, messaging::{channel::ChannelSyscallNumbers, port::PortSyscallNumbers}, processes::{action::ProcessActionSyscalls, info::ProcessInfoSyscalls}, threads::{actions::ThreadActionSyscalls, info::ThreadInfoSyscalls}}, task::{Process, Thread, ThreadRegisters}, task_storage::{get_process, get_thread}}}, define_per_cpu_u64, early_print, early_println, register_syscall_groups};
+use crate::{arch::amd64::{gdt::{USER_CODE_SELECTOR, USER_DATA_SELECTOR}, scheduler::{PerCpuSchedulerData, syscall::{capability::action::CapabilityActionSyscalls, interrupts::action::IrqSyscallNumbers, io::IoPortSyscalls, memory::{vma::MemorySyscallNumbers, vmo::MemoryVmoSyscalls}, messaging::{channel::ChannelSyscallNumbers, port::PortSyscallNumbers}, processes::{action::ProcessActionSyscalls, info::ProcessInfoSyscalls}, threads::{actions::ThreadActionSyscalls, info::ThreadInfoSyscalls}}, task::{Process, Thread, ThreadRegisters}, task_storage::{get_thread}}}, define_per_cpu_u64, early_print, early_println, register_syscall_groups};
 
 pub mod syscall_groups;
 pub mod messaging;
@@ -14,6 +14,7 @@ mod processes;
 mod memory;
 mod capability;
 mod io;
+mod job;
 
 use threads::info::_SYSCALL_GROUP as THREAD_INFO_SYSCALL_GROUP;
 use threads::actions::_SYSCALL_GROUP as THREAD_ACTIONS_SYSCALL_GROUP;
