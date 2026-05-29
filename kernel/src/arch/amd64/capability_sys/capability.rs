@@ -3,7 +3,7 @@ use core::ops::BitAnd;
 use alloc::sync::Arc;
 use spin::Mutex;
 
-use crate::arch::amd64::{ipc::{channel::ChannelHandle, port::Port}, memory::vmo::Vmo, scheduler::task::{Process, Thread}};
+use crate::{arch::amd64::{ipc::{channel::ChannelHandle, port::Port}, memory::vmo::Vmo, scheduler::task::{Process, Thread}}, isolation::domain::Domain};
 
 #[derive(Clone)]
 pub enum CapType {
@@ -14,14 +14,14 @@ pub enum CapType {
     CNode(Arc<Process>),
     Vmo(Arc<Mutex<Vmo>>),
     Channel(ChannelHandle),
-    Port(Arc<Port>)
+    Port(Arc<Port>),
+    Domain(Arc<Domain>)
 }
 
 pub struct Capability {
     pub rights: Rights,
     pub _type: CapType
 }
-
 
 impl Capability {
     pub fn new(_type: CapType, rights: Rights) -> Self {
@@ -78,6 +78,14 @@ impl Rights {
 
     pub fn contains(self, other: Rights) -> bool {
         (self.0 & other.0) == other.0
+    }
+
+    pub const fn empty() -> Self {
+        Rights(0)
+    }
+
+    pub const fn all() -> Self {
+        Rights(0xFFF)
     }
 }
 

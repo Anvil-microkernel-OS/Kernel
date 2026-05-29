@@ -33,6 +33,14 @@ static inline int64_t get_proc_name(uint64_t capability, char* buffer, uint64_t 
     return syscall3(SYS_PROC_GET_NAME, capability, (uint64_t)buffer, buff_len);
 }
 
-static inline int64_t create_proc(uint64_t capability, const char* name, uint64_t name_len) {
-    return syscall3(SYS_PROC_CREATE, capability, (uint64_t)name, name_len);
+typedef struct
+{
+    uint64_t proc_cap;
+    uint64_t cnode_cap;
+    uint64_t vspce_cap;
+} initial_capabilities_t;
+
+
+static inline int64_t create_proc(uint64_t capability, uint64_t domain_capability, const char* name, initial_capabilities_t* initial_caps) {
+    return syscall5(SYS_PROC_CREATE, capability, domain_capability, (uint64_t)name, sizeof(name), (uint64_t)initial_caps);
 }

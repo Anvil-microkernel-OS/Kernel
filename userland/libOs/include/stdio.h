@@ -1,5 +1,6 @@
 #pragma once
 
+#include "syscalls.h"
 #include "types.h"
 #include "stdlib.h"
 

@@ -1,9 +1,9 @@
 use core::{cell::UnsafeCell, sync::atomic::AtomicU64};
 
-use alloc::{boxed::Box, string::String, sync::Weak, vec::Vec};
+use alloc::{boxed::Box, string::String, sync::{Arc, Weak}, vec::Vec};
 use atomic_enum::atomic_enum;
 use spin::{Mutex, RwLock};
-use crate::arch::amd64::{capability_sys::cnode::CNode, gdt::IO_PORTS, scheduler::{addr_space::AddrSpace, stack::KernelStack}};
+use crate::{arch::amd64::{capability_sys::cnode::CNode, gdt::IO_PORTS, scheduler::{addr_space::AddrSpace, stack::KernelStack}}, isolation::domain::Domain};
 
 pub type Pid = u32;
 pub type Tid = u32;
@@ -36,6 +36,7 @@ pub struct Process {
     pub cnode: CNode,
     pub iopb_permissions: Mutex<Option<Box<[u8; IO_PORTS]>>>,
     pub iopb_gen: AtomicU64,
+    pub domain: Arc<Domain>
 }
 
 unsafe impl Send for Thread {}

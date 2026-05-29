@@ -4,9 +4,10 @@ use alloc::{string::String, sync::Arc};
 use alloc::vec::{Vec};
 use spin::mutex::Mutex;
 
-use crate::arch::amd64::capability_sys::cap_resolver::resolve_process;
+use crate::arch::amd64::capability_sys::cap_resolver::{resolve_domain, resolve_process};
 use crate::arch::amd64::capability_sys::capability::{CapType, Capability, Rights};
 use crate::arch::amd64::capability_sys::cnode::{CNode, CapIdx};
+use crate::arch::amd64::memory::u_k_boundary::uaccsess::copy_to_user;
 use crate::arch::amd64::scheduler::syscall::get_curr_exec_ctx;
 use crate::{arch::amd64::{memory::{u_k_boundary::uaccsess::copy_slice_from_user, vmm::create_new_pt4_from_kernel_pt4}, scheduler::{addr_space::AddrSpace, exec_loader::phys_to_offset_page_table, syscall::{SyscallArguments, SyscallError}, task::{Process}, task_storage::{register_process}}}, define_syscall_group};
 
@@ -19,11 +20,20 @@ define_syscall_group! {
 
 static NEXT_PID: AtomicU32 = AtomicU32::new(2);
 
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct InitialCapabilities {
+    proc_cap_idx: u64,
+    cnode_cap_idx: u64,
+    vspace_cap_idx: u64
+}
 
 fn handle_proc_create(
     capability: CapIdx,
+    domain_capability: CapIdx,
     name_ptr: u64,
     name_len: u64,
+    capabilities: u64
 ) -> Result<u64, SyscallError> {
     if name_len == 0 {
         return Err(SyscallError::BufferTooSmall)
@@ -36,7 +46,11 @@ fn handle_proc_create(
 
     let ctx = get_curr_exec_ctx();
 
+    ctx.1.domain.check_process_limit().map_err(|_| SyscallError::ResourceExhausted)?;
+
     resolve_process(&ctx.1.cnode, capability, Rights::MANAGE).map_err(|_| SyscallError::Fault)?;
+
+    let domain = resolve_domain(&ctx.1.cnode, domain_capability, Rights::MANAGE).map_err(|_| SyscallError::PermissionDenied)?;
 
     let new_pml4_phys = create_new_pt4_from_kernel_pt4();
     let pt = phys_to_offset_page_table(new_pml4_phys);
@@ -48,14 +62,25 @@ fn handle_proc_create(
         addr_space: Mutex::new(AddrSpace::new(pt)),
         cnode: CNode::new(),
         iopb_permissions: Mutex::new(None),
-        iopb_gen: AtomicU64::new(0)
+        iopb_gen: AtomicU64::new(0),
+        domain: domain.0.clone()
     });
     
     register_process(process.clone());
 
-    let cap_idx = ctx.1.cnode.alloc(Capability::new(CapType::Process(process), Rights::MANAGE));
+    let process_cap_idx = ctx.1.cnode.alloc(Capability::new(CapType::Process(process.clone()), Rights::ALL));
+    let cnode_cap_idx = ctx.1.cnode.alloc(Capability::new(CapType::CNode(process.clone()), Rights::ALL));
+    let vspace_cap_idx = ctx.1.cnode.alloc(Capability::new(CapType::VSpace(process.clone()), Rights::ALL));
     
-    Ok(cap_idx as u64)
+    ctx.1.domain.on_process_created();
+
+    copy_to_user::<InitialCapabilities>(capabilities as usize, InitialCapabilities{
+        proc_cap_idx: process_cap_idx as u64, 
+        cnode_cap_idx: cnode_cap_idx as u64,
+        vspace_cap_idx: vspace_cap_idx as u64
+    });
+
+    Ok(0)
 }
 
 fn handle_proc_start(target_proc_cap: CapIdx) ->Result<u64, SyscallError> {
@@ -64,7 +89,7 @@ fn handle_proc_start(target_proc_cap: CapIdx) ->Result<u64, SyscallError> {
 
 pub fn dispatch_process_action_syscalls(syscall: ProcessActionSyscalls, args: &SyscallArguments) ->Result<u64, SyscallError> {
     match syscall {
-        ProcessActionSyscalls::ProcCreate => handle_proc_create(args.arg1 as u32, args.arg2, args.arg3),
-        ProcessActionSyscalls::ProcStart => handle_proc_start(args.arg1 as u32)
+        ProcessActionSyscalls::ProcCreate => handle_proc_create(args.arg1 as CapIdx, args.arg2 as CapIdx, args.arg3, args.arg4, args.arg5),
+        ProcessActionSyscalls::ProcStart => handle_proc_start(args.arg1 as CapIdx)
     }
 }

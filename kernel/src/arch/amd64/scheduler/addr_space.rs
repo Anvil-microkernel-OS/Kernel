@@ -7,11 +7,11 @@ use x86_64::{
         mapper::Translate,
     },
 };
-use crate::arch::amd64::memory::{
+use crate::{arch::amd64::memory::{
         misc::virt_to_phys,
         pmm::pages_allocator::free_pages,
         vmm::{PAGE_SIZE, map_single_page, unmap_single_page, update_page_flags}, vmo::Vmo,
-    };
+    }, early_println};
 
 bitflags::bitflags! {
     #[derive(Clone, Copy, Debug)]
@@ -94,6 +94,7 @@ impl AddrSpace {
         vmo_offset: usize,
         flags:      MapFlags,
     ) -> Result<VirtAddr, VmaError> {
+        early_println!("Penis size {} vmo offs {}", size, vmo_offset);
         if size == 0
             || size % PAGE_SIZE != 0
             || vmo_offset % PAGE_SIZE != 0
@@ -106,7 +107,7 @@ impl AddrSpace {
                 return Err(VmaError::NotAligned);
             }
         }
-
+       
         {
             let v = vmo.lock();
             if vmo_offset.checked_add(size).map(|e| e > v.size).unwrap_or(true) {

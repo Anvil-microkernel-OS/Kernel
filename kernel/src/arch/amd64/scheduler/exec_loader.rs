@@ -13,7 +13,7 @@ use crate::{arch::amd64::{
         stack::{DEFAULT_KERNEL_STACK_SIZE, allocate_kernel_stack},
         task::{AtomicThreadState, Pid, Process, Thread, ThreadRegisters, ThreadState, Tid},
     }
-}, early_println};
+}, early_println, isolation::{domain::{self, Domain}, root_domain}};
 
 const RFLAGS_WITH_IR: u64 = 0x202;
 pub const USER_STACK_PAGES_COUNT: usize = 4;
@@ -36,21 +36,24 @@ pub struct InitSvrsBootInfo {
     pub self_cnode_cap:  u64,
     pub self_thread_cap: u64,
     pub self_proc_cap: u64,
+    pub self_domain_cap: u64,
     pub cpio_base_addr:  u64,
     pub cpio_size:       u64,
 }
 
-pub fn make_init_caps(proc: &Arc<Process>, thread: &Arc<Thread>, cnode: &CNode) -> InitSvrsBootInfo {
-    let self_vspace_cap = cnode.alloc(Capability::new(CapType::VSpace(proc.clone()), Rights::ALL)) as u64;
-    let self_cnode_cap  = cnode.alloc(Capability::new(CapType::CNode(proc.clone()),  Rights::ALL)) as u64;
-    let self_thread_cap = cnode.alloc(Capability::new(CapType::Thread(thread.clone()),  Rights::ALL)) as u64;
-    let self_proc_cap   = cnode.alloc(Capability::new(CapType::Process(proc.clone()),  Rights::ALL)) as u64;
+pub fn make_init_caps(proc: &Arc<Process>, thread: &Arc<Thread>, cnode: &CNode, domain: &Arc<Domain>) -> InitSvrsBootInfo {
+    let self_vspace_cap = cnode.alloc(Capability::new(CapType::VSpace(proc.clone()), Rights::all())) as u64;
+    let self_cnode_cap  = cnode.alloc(Capability::new(CapType::CNode(proc.clone()),  Rights::all())) as u64;
+    let self_thread_cap = cnode.alloc(Capability::new(CapType::Thread(thread.clone()),  Rights::all())) as u64;
+    let self_proc_cap   = cnode.alloc(Capability::new(CapType::Process(proc.clone()),  Rights::all())) as u64;
+    let self_domain_cap      = cnode.alloc(Capability::new(CapType::Domain(domain.clone()), Rights::all())) as u64;
 
     InitSvrsBootInfo {
         self_vspace_cap,
         self_cnode_cap,
         self_thread_cap,
         self_proc_cap,
+        self_domain_cap,
         cpio_base_addr: 0,
         cpio_size: 0,
     }
@@ -121,6 +124,8 @@ pub fn make_init_task(
 
     let kernel_stack = allocate_kernel_stack(DEFAULT_KERNEL_STACK_SIZE);
 
+    let root_domain = root_domain();
+
     let process = Arc::new(Process {
         pid,
         name: String::from(name),
@@ -129,6 +134,7 @@ pub fn make_init_task(
         cnode:            CNode::new(),
         iopb_permissions: Mutex::new(None),
         iopb_gen:         AtomicU64::new(0),
+        domain: root_domain.clone()
     });
 
     let thread = Arc::new(Thread {
@@ -144,7 +150,7 @@ pub fn make_init_task(
         state: AtomicThreadState::new(ThreadState::Ready),
     });
 
-    let mut boot_info = make_init_caps(&process, &thread, &process.cnode);
+    let mut boot_info = make_init_caps(&process, &thread, &process.cnode, root_domain);
     boot_info.cpio_base_addr = USER_CPIO_START_VADDR;
     boot_info.cpio_size      = cpio.len() as u64;
 
@@ -166,6 +172,8 @@ pub fn make_init_task(
 
     prepare_new_thread(&thread);
     process.threads.lock().push(Arc::downgrade(&thread));
+
+
 
     Ok((process, thread))
 }
@@ -198,6 +206,7 @@ pub fn make_kernel_task(pid: Pid, tid: Tid, name: &'static str, entry_point: u64
         cnode:            CNode::new(),
         iopb_permissions: Mutex::new(None),
         iopb_gen:         AtomicU64::new(0),
+        domain: root_domain().clone()
     });
 
     let thread = Thread {

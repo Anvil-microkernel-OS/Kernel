@@ -12,6 +12,7 @@ use crate::bootinfo::BootInfo;
 use crate::cpio_parser::cpio_find;
 use crate::early_print::fb_printer::{RENDERER, ScrollingFbTextRenderer};
 use crate::framebuffer::Framebuffer;
+use crate::isolation::init_root_domain;
 use crate::panic::panic_screen;
 extern crate alloc;
 

@@ -1,7 +1,7 @@
 use alloc::sync::Arc;
 use spin::Mutex;
 
-use crate::arch::amd64::{capability_sys::{capability::{CapType, Rights}, cnode::{CNode, CapIdx}}, ipc::{channel::ChannelHandle, port::Port}, memory::vmo::Vmo, scheduler::{syscall::SyscallError, task::{Process, Thread}}};
+use crate::{arch::amd64::{capability_sys::{capability::{CapType, Rights}, cnode::{CNode, CapIdx}}, ipc::{channel::ChannelHandle, port::Port}, memory::vmo::Vmo, scheduler::{syscall::SyscallError, task::{Process, Thread}}}, isolation::domain::Domain};
 
 pub enum ResolverError {
     InvalidCapabilityIdx,
@@ -134,6 +134,23 @@ pub fn resolve_port(
     
     match &cap._type {
         CapType::Port(port) => Ok((Arc::clone(port), cap.rights)),
+        _ => Err(ResolverError::WrongLocalType),
+    }
+}
+
+pub fn resolve_domain(
+    cnode: &CNode,
+    cap_idx: CapIdx,
+    required_rights: Rights,
+) -> Result<(Arc<Domain>, Rights), ResolverError> {
+    let cap = cnode.get(cap_idx).ok_or(ResolverError::InvalidCapabilityIdx)?;
+    
+    if !cap.rights.contains(required_rights) {
+        return Err(ResolverError::PermissionDenied);
+    }
+    
+    match &cap._type {
+        CapType::Domain(domain) => Ok((Arc::clone(domain), cap.rights)),
         _ => Err(ResolverError::WrongLocalType),
     }
 }

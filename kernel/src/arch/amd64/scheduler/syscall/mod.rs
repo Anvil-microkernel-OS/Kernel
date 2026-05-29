@@ -4,7 +4,7 @@ use alloc::{format, sync::Arc};
 use spin::Mutex;
 use x86_64::{VirtAddr, registers::{control::{Efer, EferFlags}, model_specific::{LStar, SFMask}, rflags::RFlags}};
 
-use crate::{arch::amd64::{gdt::{USER_CODE_SELECTOR, USER_DATA_SELECTOR}, scheduler::{PerCpuSchedulerData, syscall::{capability::action::CapabilityActionSyscalls, interrupts::action::IrqSyscallNumbers, io::IoPortSyscalls, memory::{vma::MemorySyscallNumbers, vmo::MemoryVmoSyscalls}, messaging::{channel::ChannelSyscallNumbers, port::PortSyscallNumbers}, processes::{action::ProcessActionSyscalls, info::ProcessInfoSyscalls}, threads::{actions::ThreadActionSyscalls, info::ThreadInfoSyscalls}}, task::{Process, Thread, ThreadRegisters}, task_storage::{get_thread}}}, define_per_cpu_u64, early_print, early_println, register_syscall_groups};
+use crate::{arch::amd64::{gdt::{USER_CODE_SELECTOR, USER_DATA_SELECTOR}, scheduler::{PerCpuSchedulerData, syscall::{capability::action::CapabilityActionSyscalls, domain::action::DomainActionSyscalls, interrupts::action::IrqSyscallNumbers, io::IoPortSyscalls, memory::{vma::MemorySyscallNumbers, vmo::MemoryVmoSyscalls}, messaging::{channel::ChannelSyscallNumbers, port::PortSyscallNumbers}, processes::{action::ProcessActionSyscalls, info::ProcessInfoSyscalls}, threads::{actions::ThreadActionSyscalls, info::ThreadInfoSyscalls}}, task::{Process, Thread, ThreadRegisters}, task_storage::get_thread}}, define_per_cpu_u64, early_print, early_println, register_syscall_groups};
 
 pub mod syscall_groups;
 pub mod messaging;
@@ -14,7 +14,7 @@ mod processes;
 mod memory;
 mod capability;
 mod io;
-mod job;
+mod domain;
 
 use threads::info::_SYSCALL_GROUP as THREAD_INFO_SYSCALL_GROUP;
 use threads::actions::_SYSCALL_GROUP as THREAD_ACTIONS_SYSCALL_GROUP;
@@ -33,6 +33,8 @@ use io::_SYSCALL_GROUP as IO_PORTS_SYSCALL_GROUP;
 
 use messaging::channel::_SYSCALL_GROUP as MESSAGING_CHNL_SYSCALL_GROUP;
 use messaging::port::_SYSCALL_GROUP as MESSAGING_PORT_SYSCALL_GROUP;
+
+use domain::action::_SYSCALL_GROUP as DOMAIN_ACTION_SYSCALL_GROUP;
 
 #[repr(i64)]
 pub (crate) enum SyscallError {
@@ -75,6 +77,7 @@ register_syscall_groups! {
     MESSAGING_CHNL_SYSCALL_GROUP,
     MESSAGING_PORT_SYSCALL_GROUP,
     PROC_ACTION_SYSCALL_GROUP,
+    DOMAIN_ACTION_SYSCALL_GROUP,
     &[25] // debug printf
 }
 
@@ -173,6 +176,11 @@ fn syscall_dispatcher(registers: &mut ThreadRegisters, args: &SyscallArguments) 
 
     if let Ok(syscall) = ChannelSyscallNumbers::try_from(args.syscall_number) {
         return messaging::channel::dispatch_channel_syscall_group(syscall, args, registers)
+            .into_syscall_return();
+    }
+
+    if let Ok(syscall) = DomainActionSyscalls::try_from(args.syscall_number) {
+        return domain::action::dispatch_domain_actions_syscall_group(syscall, args)
             .into_syscall_return();
     }
 

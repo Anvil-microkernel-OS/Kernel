@@ -1,7 +1,7 @@
 use spin::Once;
 use x86_64::instructions;
 
-use crate::{arch::amd64::{acpi::init_acpi, apic::{disable_pic, init_lapic, ioapic_manager::ioapic_manager_init}, cpu::{cpuid::{CpuIdInfoFull, get_cpuid_full}, smp::{percpu::{get_region_by_id, init_percpu_regions}, startup::{early_setup_percpu_bsp, smp_startup}}}, gdt::init_bootstrap_gdt, interrupts::idt::init_idt, memory::{MemoryInitInfo, init_memory_subsys, u_k_boundary::uaccsess::enable_smep}, scheduler::global_init_scheduler, timer::initialize_hpet}, bootinfo::BootInfo, early_println};
+use crate::{arch::amd64::{acpi::init_acpi, apic::{disable_pic, init_lapic, ioapic_manager::ioapic_manager_init}, cpu::{cpuid::{CpuIdInfoFull, get_cpuid_full}, smp::{percpu::{get_region_by_id, init_percpu_regions}, startup::{early_setup_percpu_bsp, smp_startup}}}, gdt::init_bootstrap_gdt, interrupts::idt::init_idt, memory::{MemoryInitInfo, init_memory_subsys, u_k_boundary::uaccsess::enable_smep}, scheduler::global_init_scheduler, timer::initialize_hpet}, bootinfo::BootInfo, early_println, isolation::init_root_domain};
 
 pub mod serial;
 pub mod cpu;
@@ -74,6 +74,10 @@ fn early_startup() {
     early_println!("Initializing IOAPIC...");
     ioapic_manager_init();
     early_println!("IOAPIC initialized!");
+
+    early_println!("Initializing root domain...");
+    init_root_domain();
+    early_println!("Root domain initialized!");
 
     early_println!("Prepare scheduler...");
     global_init_scheduler();

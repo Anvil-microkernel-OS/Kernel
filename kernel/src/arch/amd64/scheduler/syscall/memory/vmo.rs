@@ -2,7 +2,7 @@ use alloc::{sync::Arc, vec::Vec};
 use spin::Mutex;
 use x86_64::{PhysAddr, VirtAddr};
 
-use crate::{arch::amd64::{capability_sys::{cap_resolver::resolve_vmo, capability::{CapType, Capability, Rights}, cnode::CapIdx}, memory::{misc::{align_up, is_user_space_addr, phys_to_virt}, pmm::pages_allocator::{PAllocFlags, alloc_pages_by_order, free_pages}, vmm::PAGE_SIZE, vmo::{Vmo, VmoType}}, scheduler::{addr_space::MapFlags, syscall::{SyscallArguments, SyscallError, get_curr_exec_ctx}}}, define_syscall_group};
+use crate::{arch::amd64::{capability_sys::{cap_resolver::resolve_vmo, capability::{CapType, Capability, Rights}, cnode::CapIdx}, memory::{misc::{align_up, is_user_space_addr, phys_to_virt}, pmm::pages_allocator::{PAllocFlags, alloc_pages_by_order, free_pages}, vmm::PAGE_SIZE, vmo::{Vmo, VmoType}}, scheduler::{addr_space::MapFlags, syscall::{SyscallArguments, SyscallError, get_curr_exec_ctx}}}, define_syscall_group, early_print, early_println};
 
 define_syscall_group! {
     pub enum MemoryVmoSyscalls {
@@ -14,6 +14,8 @@ define_syscall_group! {
 
 fn handle_vmo_create(size: u64, _type: u64) -> Result<u64, SyscallError> {
     let ctx = get_curr_exec_ctx();
+
+    ctx.1.domain.check_vmo_limit().map_err(|_| SyscallError::ResourceExhausted)?;
 
     let aligned     = align_up(size as usize, PAGE_SIZE);
     let num_pages   = aligned / PAGE_SIZE;
@@ -34,7 +36,9 @@ fn handle_vmo_create(size: u64, _type: u64) -> Result<u64, SyscallError> {
     let vmo = Arc::new(Mutex::new(Vmo { frames, size: aligned, _type: vmo_type }));
 
     let slot = ctx.1.cnode.alloc(Capability::new(CapType::Vmo(vmo), Rights::ALL));
-    
+
+    ctx.1.domain.on_vmo_created();
+
     Ok(slot as u64)  
 }
 
@@ -45,7 +49,6 @@ fn handle_vmo_write(
     len: u64,
 ) -> Result<u64, SyscallError> {
     let ctx = get_curr_exec_ctx();
-
     let vmo_obj = resolve_vmo(&ctx.1.cnode, vmo_cap, Rights::WRITE).map_err(|err| err.to_syscall_error())?;
 
     let offset = offset as usize;
@@ -185,7 +188,7 @@ fn handle_vmo_read(
 pub fn dispatch_vmo_memory_syscall_group(syscall: MemoryVmoSyscalls, args: &SyscallArguments) -> Result<u64, SyscallError> {
     match syscall {
         MemoryVmoSyscalls::VmoCreate => handle_vmo_create(args.arg1, args.arg2),
-        MemoryVmoSyscalls::VmoRead   => handle_vmo_read(args.arg1 as u32, args.arg2, args.arg3, args.arg3),
-        MemoryVmoSyscalls::VmoWrite  => handle_vmo_write(args.arg1 as u32, args.arg2, args.arg3, args.arg3)
+        MemoryVmoSyscalls::VmoRead  => handle_vmo_read(args.arg1 as u32, args.arg2, args.arg3, args.arg4),
+        MemoryVmoSyscalls::VmoWrite => handle_vmo_write(args.arg1 as u32, args.arg2, args.arg3, args.arg4),
     }
 }

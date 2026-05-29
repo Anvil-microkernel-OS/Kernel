@@ -50,5 +50,5 @@ static inline int64_t vmo_create(uint64_t size, enum vmo_type_e type) {
 }
 
 static inline int64_t vmo_write(uint64_t vmo_cap, void* data_ptr, size_t offset, size_t len) {
-    return syscall4(SYS_VMO_CREATE, vmo_cap, (uint64_t)data_ptr, (uint64_t)offset, (uint64_t)len);
+    return syscall4(SYS_VMO_WRITE, vmo_cap, (uint64_t)data_ptr, (uint64_t)offset, (uint64_t)len);
 }

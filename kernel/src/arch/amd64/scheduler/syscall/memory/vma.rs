@@ -9,7 +9,7 @@ use crate::{
             },
         }
     },
-    define_syscall_group,
+    define_syscall_group, early_println,
 };
 
 define_syscall_group! {
@@ -49,9 +49,7 @@ fn handle_vma_map(
     let args = copy_from_user::<VmaMapArgs>(args_user_ptr as usize).ok_or(SyscallError::Fault)?;
 
     let ctx = get_curr_exec_ctx();
-
     let vspace_obj = resolve_vspace(&ctx.1.cnode, args.vspace_cap as u32, Rights::WRITE).map_err(|err| err.to_syscall_error())?;
-
     let vmo_obj = resolve_vmo(&ctx.1.cnode, args.vmo_cap as u32, Rights::MANAGE).map_err(|err| err.to_syscall_error())?;
 
     let map_flags = MapFlags::from_bits_truncate(args.flags) | MapFlags::USER;

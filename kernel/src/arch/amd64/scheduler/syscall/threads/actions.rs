@@ -3,7 +3,7 @@ use core::{cell::UnsafeCell, sync::atomic::{AtomicU32, AtomicU64, Ordering}};
 use alloc::sync::Arc;
 use spin::rwlock::RwLock;
 
-use crate::{arch::amd64::{capability_sys::{cap_resolver::{resolve_process, resolve_thread}, capability::{CapType, Capability, Rights}, cnode::CapIdx}, memory::u_k_boundary::uaccsess::copy_from_user, scheduler::{exec_loader::prepare_new_thread, sleep, stack::{DEFAULT_KERNEL_STACK_SIZE, allocate_kernel_stack}, syscall::{SyscallArguments, SyscallError, get_curr_exec_ctx, threads::info::GeneralGroupRegisters}, task::{AtomicThreadState, Thread, ThreadRegisters, ThreadState}, task_storage::{register_thread, spawn_thread}}}, define_syscall_group, early_print, early_println};
+use crate::{arch::amd64::{capability_sys::{cap_resolver::{resolve_process, resolve_thread}, capability::{CapType, Capability, Rights}, cnode::CapIdx}, memory::u_k_boundary::uaccsess::copy_from_user, scheduler::{exec_loader::prepare_new_thread, sleep, stack::{DEFAULT_KERNEL_STACK_SIZE, allocate_kernel_stack}, syscall::{SyscallArguments, SyscallError, get_curr_exec_ctx, threads::info::GeneralGroupRegisters}, task::{AtomicThreadState, Thread, ThreadRegisters, ThreadState}, task_storage::{register_thread, spawn_thread}}}, define_syscall_group};
 
 define_syscall_group! {
     pub enum ThreadActionSyscalls {
@@ -20,10 +20,11 @@ static NEXT_TID: AtomicU32 = AtomicU32::new(1);
 fn handle_thread_create(proc_cap: CapIdx) -> Result<u64, SyscallError> {
     let ctx = get_curr_exec_ctx();
 
-    let target_obj = resolve_process(&ctx.1.cnode, proc_cap, Rights::WRITE).map_err(|err| err.to_syscall_error())?;
+    ctx.1.domain.check_thread_limit().map_err(|_| SyscallError::ResourceExhausted)?;
+
+    let target_obj = resolve_process(&ctx.1.cnode, proc_cap, Rights::MANAGE).map_err(|err| err.to_syscall_error())?;
 
     let kernel_stack  = allocate_kernel_stack(DEFAULT_KERNEL_STACK_SIZE);
-
     let new_thread = Arc::new(Thread {
         parent_proc: RwLock::new(Arc::downgrade(&target_obj.0)),
         tid: NEXT_TID.fetch_add(1, Ordering::Relaxed),
@@ -40,6 +41,8 @@ fn handle_thread_create(proc_cap: CapIdx) -> Result<u64, SyscallError> {
     register_thread(&new_thread);
 
     let slot = target_obj.0.cnode.alloc(Capability::new(CapType::Thread(new_thread), Rights::MANAGE));
+
+    ctx.1.domain.on_thread_created();
 
     Ok(slot as u64)
 }
