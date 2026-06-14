@@ -1,13 +1,13 @@
 use core::arch::naked_asm;
 
-use alloc::{format, sync::Arc};
+use alloc::{format, string::String, sync::Arc};
 use spin::Mutex;
 use x86_64::{VirtAddr, registers::{control::{Efer, EferFlags}, model_specific::{LStar, SFMask}, rflags::RFlags}};
+use crate::{arch::amd64::{gdt::{USER_CODE_SELECTOR, USER_DATA_SELECTOR}, memory::u_k_boundary::uaccsess::{copy_from_user, copy_slice_from_user}, scheduler::{PerCpuSchedulerData, task::{Process, Thread, ThreadRegisters}, task_storage::get_thread}, syscall::{capability::action::CapabilityActionSyscalls, domain::action::DomainActionSyscalls, interrupts::action::IrqSyscallNumbers, io::IoPortSyscalls, memory::{vma::MemorySyscallNumbers, vmo::MemoryVmoSyscalls}, messaging::{channel::ChannelSyscallNumbers, port::PortSyscallNumbers}, processes::{action::ProcessActionSyscalls, info::ProcessInfoSyscalls}, pwr_manager::PwrManagerSyscalls, threads::{actions::ThreadActionSyscalls, info::ThreadInfoSyscalls}}}, define_per_cpu_u64, early_print, early_println, register_syscall_groups};
 
-use crate::{arch::amd64::{gdt::{USER_CODE_SELECTOR, USER_DATA_SELECTOR}, scheduler::{PerCpuSchedulerData, syscall::{capability::action::CapabilityActionSyscalls, domain::action::DomainActionSyscalls, interrupts::action::IrqSyscallNumbers, io::IoPortSyscalls, memory::{vma::MemorySyscallNumbers, vmo::MemoryVmoSyscalls}, messaging::{channel::ChannelSyscallNumbers, port::PortSyscallNumbers}, processes::{action::ProcessActionSyscalls, info::ProcessInfoSyscalls}, threads::{actions::ThreadActionSyscalls, info::ThreadInfoSyscalls}}, task::{Process, Thread, ThreadRegisters}, task_storage::get_thread}}, define_per_cpu_u64, early_print, early_println, register_syscall_groups};
 
-pub mod syscall_groups;
-pub mod messaging;
+pub (crate) mod syscall_groups;
+mod messaging;
 mod interrupts;
 mod threads;
 mod processes;
@@ -15,6 +15,7 @@ mod memory;
 mod capability;
 mod io;
 mod domain;
+mod pwr_manager;
 
 use threads::info::_SYSCALL_GROUP as THREAD_INFO_SYSCALL_GROUP;
 use threads::actions::_SYSCALL_GROUP as THREAD_ACTIONS_SYSCALL_GROUP;
@@ -35,6 +36,8 @@ use messaging::channel::_SYSCALL_GROUP as MESSAGING_CHNL_SYSCALL_GROUP;
 use messaging::port::_SYSCALL_GROUP as MESSAGING_PORT_SYSCALL_GROUP;
 
 use domain::action::_SYSCALL_GROUP as DOMAIN_ACTION_SYSCALL_GROUP;
+
+use pwr_manager::_SYSCALL_GROUP as PWR_MANAGER_SYSCALL_GROUP;
 
 #[repr(i64)]
 pub (crate) enum SyscallError {
@@ -78,6 +81,7 @@ register_syscall_groups! {
     MESSAGING_PORT_SYSCALL_GROUP,
     PROC_ACTION_SYSCALL_GROUP,
     DOMAIN_ACTION_SYSCALL_GROUP,
+    PWR_MANAGER_SYSCALL_GROUP,
     &[25] // debug printf
 }
 
@@ -106,11 +110,16 @@ fn handle_debug_print(ptr: u64, len: u64) -> Result<u64, SyscallError> {
         return Err(SyscallError::InvalidArgument);
     }
 
-    let slice = unsafe { core::slice::from_raw_parts(ptr as *const u8, len as usize) };
+    let mut buf = [0u8; 4096];
+    let dst = &mut buf[..len as usize];
 
-    for &byte in slice {
-        if byte == 0 { break; }
-        early_print!("{}", byte as char);
+    if !copy_slice_from_user::<u8>(ptr as usize, dst) {
+        return Err(SyscallError::Fault);
+    }
+
+    for byte in dst {
+        if *byte == 0 { break; }
+        early_print!("{}", *byte as char);
     }
     Ok(0)
 }
@@ -184,6 +193,11 @@ fn syscall_dispatcher(registers: &mut ThreadRegisters, args: &SyscallArguments) 
             .into_syscall_return();
     }
 
+    if let Ok(syscall) = PwrManagerSyscalls::try_from(args.syscall_number) {
+        return pwr_manager::dispatch_pwr_manager_syscall_group(syscall, args)
+            .into_syscall_return();
+    }
+
     if args.syscall_number == 25 {
         return handle_debug_print(args.arg1, args.arg2).into_syscall_return();
     }
@@ -248,6 +262,7 @@ pub(super) unsafe extern "C" fn syscall_handler() {
         "push r14",
         "push r15",
 
+        "xor rbp, rbp",
         "mov rdi, rsp",
         "call {syscall_handler_inner}",
 

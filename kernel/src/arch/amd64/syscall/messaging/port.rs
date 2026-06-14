@@ -1,4 +1,4 @@
-use crate::{arch::amd64::{capability_sys::{cap_resolver::{resolve_channel, resolve_port}, capability::{CapType, Capability, Rights}, cnode::CapIdx}, ipc::port::{Port, PortAction, PortErr}, scheduler::{block_current_task, syscall::{SyscallArguments, SyscallError, get_curr_exec_ctx}, task::{Process, ThreadRegisters, Tid}, task_storage::{get_thread, wake_thread}}}, define_syscall_group};
+use crate::{arch::amd64::{capability_sys::{cap_resolver::{resolve_channel, resolve_port}, capability::{CapType, Capability, Rights}, cnode::CapIdx}, ipc::port::{Port, PortAction, PortErr}, scheduler::{block_current_task, task::{Process, ThreadRegisters, Tid}, task_storage::{get_thread, wake_thread}}, syscall::{SyscallArguments, SyscallError, get_curr_exec_ctx}}, define_syscall_group};
 
 define_syscall_group! {
     pub enum PortSyscallNumbers {

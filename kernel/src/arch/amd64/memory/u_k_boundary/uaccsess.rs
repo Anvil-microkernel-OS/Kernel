@@ -1,3 +1,5 @@
+use crate::arch::amd64::CPUID_INFO;
+
 pub fn copy_from_user<T>(ptr: usize) -> Option<T>
 where T: Copy
 {
@@ -82,21 +84,24 @@ fn validate_user_ptr(ptr: usize, size: usize) -> bool {
     true
 }
 
-pub fn enable_smep() -> bool {
-    let cpuid =  core::arch::x86_64::__cpuid_count(7, 0);
-    
-    let has_smep = cpuid.ebx & (1 << 7)  != 0;
+pub fn enable_smap_smep_prot() -> bool {
+    let has_smep = CPUID_INFO.get().unwrap().has_smep;
+    let has_smap = CPUID_INFO.get().unwrap().has_smap;
 
     unsafe {
         let mut cr4: u64;
         core::arch::asm!("mov {}, cr4", out(reg) cr4);
         
         if has_smep {
-            cr4 |= 1 << 20; // SMEP bit
+            cr4 |= 1 << 20; 
+        }
+
+        if has_smap {
+            cr4 |= 1 << 21; 
         }
         
         core::arch::asm!("mov cr4, {}", in(reg) cr4);
     }
 
-    return has_smep;
+    return has_smep || has_smap;
 }

@@ -1,6 +1,6 @@
 use alloc::vec::Vec;
 
-use crate::{arch::amd64::{capability_sys::{cap_resolver::resolve_process, capability::Rights, cnode::CapIdx}, memory::u_k_boundary::uaccsess::{copy_slice_to_user, copy_to_user}, scheduler::{syscall::{SyscallArguments, SyscallError, get_curr_exec_ctx}, task::Tid, task_storage::{get_process, get_thread}}}, define_syscall_group};
+use crate::{arch::amd64::{capability_sys::{cap_resolver::resolve_process, capability::Rights, cnode::CapIdx}, memory::u_k_boundary::uaccsess::{copy_slice_to_user, copy_to_user}, scheduler::{task::Tid, task_storage::{get_process, get_thread}}, syscall::{SyscallArguments, SyscallError, get_curr_exec_ctx}}, define_syscall_group};
 
 define_syscall_group! {
     pub enum ProcessInfoSyscalls {

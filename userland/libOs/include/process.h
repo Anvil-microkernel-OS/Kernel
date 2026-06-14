@@ -10,6 +10,8 @@
 #define SYS_PROC_CREATE 60
 #define SYS_PROC_RUN 61
 
+#define SYS_PROC_EXIT 62
+
 typedef struct {
     uint32_t* tids;
     size_t    count;
@@ -43,4 +45,12 @@ typedef struct
 
 static inline int64_t create_proc(uint64_t capability, uint64_t domain_capability, const char* name, initial_capabilities_t* initial_caps) {
     return syscall5(SYS_PROC_CREATE, capability, domain_capability, (uint64_t)name, sizeof(name), (uint64_t)initial_caps);
+}
+
+static inline int64_t run_proc(uint64_t capability, uint64_t main_thread_cap) {
+    return syscall2(SYS_PROC_RUN, capability, main_thread_cap);
+}
+
+static inline void exit_proc(uint64_t capability, int64_t code) {
+    (void)syscall2(SYS_PROC_EXIT, capability, code);
 }

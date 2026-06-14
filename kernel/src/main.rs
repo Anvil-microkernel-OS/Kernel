@@ -3,7 +3,7 @@
 #![feature(cell_leak)]
 #![feature(abi_x86_interrupt)]
 
-use alloc::format;
+use alloc::{format, vec};
 use core::fmt::Write;
 use crate::arch::amd64::scheduler::exec_loader::make_init_task;
 use crate::arch::amd64::scheduler::task_storage::{register_process, register_thread, spawn_thread};
@@ -86,8 +86,10 @@ unsafe extern "C" fn kmain() -> ! {
 
     early_println!("Detecting init service...");
 
+    let future_pid = 1;
+
     if let Some(data) = cpio_find(init_srvs, "init.bin") {
-        let init = make_init_task(data, 1, 0, "init", init_srvs).unwrap();
+        let init = make_init_task(data, future_pid, 0, "init", init_srvs).unwrap();
         register_process(init.0);
         register_thread(&init.1);
         spawn_thread(init.1);

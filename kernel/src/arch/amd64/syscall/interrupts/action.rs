@@ -1,4 +1,4 @@
-use crate::{arch::amd64::{apic::{PercpuLapic, ioapic_manager::{DeliveryMode, IrqError, Polarity, TriggerMode, ioapic_manager}}, capability_sys::{cap_resolver::resolve_port, capability::Rights, cnode::CapIdx}, interrupts::irq_trans_manager::IDT_TRANSFER_MANAGER, scheduler::{syscall::{SyscallArguments, SyscallError, get_curr_exec_ctx}, task::Tid, task_storage::get_thread}}, define_syscall_group};
+use crate::{arch::amd64::{apic::{PercpuLapic, ioapic_manager::{DeliveryMode, IrqError, Polarity, TriggerMode, ioapic_manager}}, capability_sys::{cap_resolver::resolve_port, capability::Rights, cnode::CapIdx}, interrupts::irq_trans_manager::IDT_TRANSFER_MANAGER, scheduler::{task::Tid, task_storage::get_thread}, syscall::{SyscallArguments, SyscallError}}, define_syscall_group};
 
 define_syscall_group! {
     pub enum IrqSyscallNumbers {

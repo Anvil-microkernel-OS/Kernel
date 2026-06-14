@@ -53,7 +53,6 @@ impl Drop for Vmo {
                 }
             }
             VmoType::Physical => {
-                // not our memory
             }
         }
     }

@@ -2,7 +2,7 @@ use core::sync::atomic::Ordering;
 
 use alloc::boxed::Box;
 
-use crate::{arch::amd64::scheduler::{syscall::{SyscallArguments, SyscallError, get_curr_exec_ctx}, task::Tid, task_storage::get_thread}, define_syscall_group};
+use crate::{arch::amd64::{scheduler::{task::Tid, task_storage::get_thread}, syscall::{SyscallArguments, SyscallError, get_curr_exec_ctx}}, define_syscall_group};
 
 define_syscall_group! {
     pub enum IoPortSyscalls {

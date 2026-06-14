@@ -16,12 +16,23 @@
 
 #define SYS_CAP_COPY 17
 
+#define SYS_PWR_MANAGER 75
+
+typedef enum {
+    REBOOT = 0,
+    SHUTDOWN = 1
+} PwrMngrCmd;
+
 static inline void spin_pause(void) {
     asm volatile("pause");
 }
 
 static inline int64_t cap_copy(uint64_t src_cnode_cap, uint64_t dst_cnode_cap, uint64_t cap2copy_idx) {
     return syscall3(SYS_CAP_COPY, src_cnode_cap, dst_cnode_cap, cap2copy_idx);
+}
+
+static inline void send_pwr_mngr_cmd(PwrMngrCmd cmd) {
+    (void)syscall1(SYS_PWR_MANAGER, cmd);
 }
 
 __attribute__((noreturn))

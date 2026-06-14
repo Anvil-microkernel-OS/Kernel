@@ -2,7 +2,7 @@ use alloc::{sync::Arc, vec::Vec};
 use spin::Mutex;
 use x86_64::{PhysAddr, VirtAddr};
 
-use crate::{arch::amd64::{capability_sys::{cap_resolver::resolve_vmo, capability::{CapType, Capability, Rights}, cnode::CapIdx}, memory::{misc::{align_up, is_user_space_addr, phys_to_virt}, pmm::pages_allocator::{PAllocFlags, alloc_pages_by_order, free_pages}, vmm::PAGE_SIZE, vmo::{Vmo, VmoType}}, scheduler::{addr_space::MapFlags, syscall::{SyscallArguments, SyscallError, get_curr_exec_ctx}}}, define_syscall_group, early_print, early_println};
+use crate::{arch::amd64::{capability_sys::{cap_resolver::resolve_vmo, capability::{CapType, Capability, Rights}, cnode::CapIdx}, memory::{misc::{align_up, is_user_space_addr, phys_to_virt}, pmm::pages_allocator::{PAllocFlags, alloc_pages_by_order, free_pages}, vmm::PAGE_SIZE, vmo::{Vmo, VmoType}}, scheduler::addr_space::MapFlags, syscall::{SyscallArguments, SyscallError, get_curr_exec_ctx}}, define_syscall_group, early_print, early_println};
 
 define_syscall_group! {
     pub enum MemoryVmoSyscalls {

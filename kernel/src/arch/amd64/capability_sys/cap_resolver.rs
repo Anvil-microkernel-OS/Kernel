@@ -1,7 +1,7 @@
 use alloc::sync::Arc;
 use spin::Mutex;
 
-use crate::{arch::amd64::{capability_sys::{capability::{CapType, Rights}, cnode::{CNode, CapIdx}}, ipc::{channel::ChannelHandle, port::Port}, memory::vmo::Vmo, scheduler::{syscall::SyscallError, task::{Process, Thread}}}, isolation::domain::Domain};
+use crate::{arch::amd64::{capability_sys::{capability::{CapType, Rights}, cnode::{CNode, CapIdx}}, ipc::{channel::ChannelHandle, port::Port}, memory::vmo::Vmo, scheduler::task::{Process, Thread}, syscall::SyscallError}, isolation::domain::Domain};
 
 pub enum ResolverError {
     InvalidCapabilityIdx,

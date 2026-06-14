@@ -1,4 +1,4 @@
-use crate::{arch::amd64::{capability_sys::{cap_resolver::resolve_cnode, capability::Rights, cnode::CapIdx}, scheduler::{syscall::{SyscallArguments, SyscallError, get_curr_exec_ctx}}}, define_syscall_group};
+use crate::{arch::amd64::{capability_sys::{cap_resolver::resolve_cnode, capability::Rights, cnode::CapIdx}, syscall::{SyscallArguments, SyscallError, get_curr_exec_ctx}}, define_syscall_group};
 
 define_syscall_group! {
     pub enum CapabilityActionSyscalls {

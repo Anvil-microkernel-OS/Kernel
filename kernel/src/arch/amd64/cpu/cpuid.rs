@@ -2,7 +2,6 @@ use core::fmt;
 
 use raw_cpuid::CpuId;
 
-use crate::early_println;
 
 #[inline]
 fn vendor_as_str(vendor: &[u8; 12]) -> &str {
@@ -18,7 +17,9 @@ pub struct CpuIdInfoFull {
     pub has_nx: bool,
     pub has_apic: bool,
     pub has_x2apic: bool,
-    pub logical_cores: u8
+    pub logical_cores: u8,
+    pub has_smap: bool,
+    pub has_smep: bool,
 }
 
 impl fmt::Display for CpuIdInfoFull {
@@ -35,6 +36,8 @@ impl fmt::Display for CpuIdInfoFull {
         writeln!(f, "APIC             : {}", self.has_apic)?;
         writeln!(f, "X2APIC           : {}", self.has_x2apic)?;
         writeln!(f, "LOGICAL_CORES    : {}", self.logical_cores)?;
+        writeln!(f, "SMAP             : {}", self.has_smap)?;
+        writeln!(f, "SMEP             : {}", self.has_smep)?;
         write!(f, "=================================")
     }
 }
@@ -53,6 +56,7 @@ pub fn get_cpuid_full() -> CpuIdInfoFull {
 
     let feature_info = cpuid.get_feature_info();
     let ext_features = cpuid.get_extended_processor_and_feature_identifiers();
+    let ef_info = cpuid.get_extended_feature_info();
 
     CpuIdInfoFull {
         vendor,
@@ -96,5 +100,8 @@ pub fn get_cpuid_full() -> CpuIdInfoFull {
             .as_ref()
             .map(|f| f.max_logical_processor_ids())
             .unwrap_or(1),
+
+        has_smap: ef_info.as_ref().map(|f| f.has_smap()).unwrap_or(false),
+        has_smep: ef_info.as_ref().map(|f| f.has_smep()).unwrap_or(false),
     }
 }

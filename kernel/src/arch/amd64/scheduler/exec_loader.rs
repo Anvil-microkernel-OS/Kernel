@@ -173,8 +173,6 @@ pub fn make_init_task(
     prepare_new_thread(&thread);
     process.threads.lock().push(Arc::downgrade(&thread));
 
-
-
     Ok((process, thread))
 }
 

@@ -1,6 +1,6 @@
 use core::sync::atomic::Ordering;
 
-use crate::{arch::amd64::{capability_sys::{cap_resolver::resolve_thread, capability::Rights, cnode::CapIdx}, memory::u_k_boundary::uaccsess::copy_to_user, scheduler::{syscall::{SyscallArguments, SyscallError, get_curr_exec_ctx}}}, define_syscall_group};
+use crate::{arch::amd64::{capability_sys::{cap_resolver::resolve_thread, capability::Rights, cnode::CapIdx}, memory::u_k_boundary::uaccsess::copy_to_user, syscall::{SyscallArguments, SyscallError, get_curr_exec_ctx}}, define_syscall_group};
 
 define_syscall_group! {
     pub enum ThreadInfoSyscalls {

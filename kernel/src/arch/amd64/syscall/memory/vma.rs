@@ -2,12 +2,7 @@ use x86_64::VirtAddr;
 
 use crate::{
     arch::amd64::{
-        capability_sys::{cap_resolver::{resolve_vmo, resolve_vspace}, capability::Rights, cnode::CapIdx}, memory::{u_k_boundary::uaccsess::copy_from_user, vmm::PAGE_SIZE}, scheduler::{
-            addr_space::{MapFlags, VmaError},
-            syscall::{
-                SyscallArguments, SyscallError, get_curr_exec_ctx,
-            },
-        }
+        capability_sys::{cap_resolver::{resolve_vmo, resolve_vspace}, capability::Rights, cnode::CapIdx}, memory::{u_k_boundary::uaccsess::copy_from_user, vmm::PAGE_SIZE}, scheduler::addr_space::{MapFlags, VmaError}, syscall::{SyscallArguments, SyscallError, get_curr_exec_ctx}
     },
     define_syscall_group, early_println,
 };

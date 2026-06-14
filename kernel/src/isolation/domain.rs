@@ -2,9 +2,9 @@ use core::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
 use alloc::{string::String, sync::Arc, vec::Vec};
 use spin::Mutex;
 use intrusive_collections::{LinkedList, LinkedListLink, UnsafeRef, intrusive_adapter};
-use crate::arch::amd64::capability_sys::capability::{CapType, Capability, Rights};
+use crate::arch::amd64::{capability_sys::capability::{CapType, Capability, Rights}, scheduler::{kill_all_processes_in_domain, task::{Pid, Tid}}};
 
-type Koid = u32;
+pub type Koid = u32;
 type DomainRef = Arc<Domain>;
 
 #[derive(Clone)]
@@ -115,6 +115,8 @@ pub struct Domain {
     pub process_count: AtomicUsize,
     pub thread_count:  AtomicUsize,
     pub vmo_count:     AtomicUsize,
+    pub is_critical: bool,
+    pub critical_procs: Option<Vec<Pid>>
 }
 
 unsafe impl Sync for Domain {}
@@ -136,8 +138,13 @@ pub enum DomainError {
     NullCapability,       
 }
 
+pub enum CollapseAction {
+    KillDomain,
+    KernelPanic,
+}
+
 impl Domain {
-    pub fn new_root(koid: Koid, name: impl Into<String>) -> DomainRef {
+    pub fn new_root(koid: Koid, name: impl Into<String>, is_critical: bool, critical_procs: Option<Vec<Pid>>) -> DomainRef {
         Arc::new(Self {
             koid,
             name: name.into(),
@@ -149,6 +156,8 @@ impl Domain {
             process_count: AtomicUsize::new(0),
             thread_count:  AtomicUsize::new(0),
             vmo_count:     AtomicUsize::new(0),
+            is_critical,
+            critical_procs
         })
     }
 
@@ -157,6 +166,8 @@ impl Domain {
         koid: Koid,
         name: impl Into<String>,
         requested_policy: DomainPolicy,
+        is_critical: bool,
+        critical_procs: Option<Vec<Pid>>
     ) -> DomainRef {
         let effective_policy = requested_policy.intersect(&parent.policy);
 
@@ -171,6 +182,8 @@ impl Domain {
             process_count: AtomicUsize::new(0),
             thread_count:  AtomicUsize::new(0),
             vmo_count:     AtomicUsize::new(0),
+            is_critical, 
+            critical_procs
         })
     }
 
@@ -234,6 +247,39 @@ impl Domain {
 
     pub fn on_process_destroyed(&self) {
         self.process_count.fetch_sub(1, Ordering::Relaxed);
+    }
+
+    pub fn notify_proc_exit(&self, pid: Pid, exit_code: i64) -> Option<CollapseAction> {
+        self.on_process_destroyed();
+
+        let is_critical = match &self.critical_procs {
+            Some(procs) => procs.contains(&pid),
+            None => false,
+        };
+
+        if !is_critical {
+            return None;
+        }
+
+        Some(self.collapse())
+    }
+
+    pub fn collapse(&self) -> CollapseAction {
+        let children = self.children.lock();
+        for child in children.iter() {
+            child.collapse();
+        }
+        drop(children);
+
+        //kill_all_processes_in_domain(self.koid);
+
+        match &self.parent {
+            Some(parent) if self.is_critical => parent.collapse(),
+            Some(_) => CollapseAction::KillDomain,
+            None => {
+                CollapseAction::KernelPanic
+            }
+        }
     }
 
     pub fn on_thread_created(&self) { self.thread_count.fetch_add(1, Ordering::Relaxed); }

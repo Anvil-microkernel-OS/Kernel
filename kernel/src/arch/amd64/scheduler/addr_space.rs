@@ -94,7 +94,6 @@ impl AddrSpace {
         vmo_offset: usize,
         flags:      MapFlags,
     ) -> Result<VirtAddr, VmaError> {
-        early_println!("Penis size {} vmo offs {}", size, vmo_offset);
         if size == 0
             || size % PAGE_SIZE != 0
             || vmo_offset % PAGE_SIZE != 0

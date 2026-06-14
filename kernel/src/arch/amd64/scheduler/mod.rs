@@ -4,13 +4,11 @@ use spin::Once;
 use x86_64::{VirtAddr, instructions::hlt};
 
 pub mod task;
-mod stack;
+pub mod stack;
 mod cpu_local;
 pub mod exec_loader;
 pub mod addr_space;
 pub mod task_storage;
-pub mod syscall;
-
 use crate::{
     arch::amd64::{
         acpi::{get_acpi_tables, madt::MadTable},
@@ -19,14 +17,12 @@ use crate::{
         scheduler::{
             cpu_local::ExecCpu,
             exec_loader::make_kernel_task,
-            syscall::{init_syscall_subsystem, set_per_cpu_TOP_OF_KERNEL_STACK},
             task::{Pid, Process, Thread, ThreadState, Tid},
             task_storage::{
-                get_thread, initialize_task_storage, steal_from_global,
-                thread_table, wake_thread,
+                get_process, get_thread, initialize_task_storage, process_table, steal_from_global, thread_table, wake_thread
             },
-        },
-    }, define_per_cpu_struct, early_println, irq
+        }, syscall::{get_curr_exec_ctx, init_syscall_subsystem, set_per_cpu_TOP_OF_KERNEL_STACK},
+    }, define_per_cpu_struct, early_println, irq, isolation::domain::Koid
 };
 
 static CPU_NUM:    AtomicU64 = AtomicU64::new(0);
@@ -164,6 +160,38 @@ unsafe fn apply_iopb(thread: *const Thread) {
             PerCpuSchedulerData::get_mut().iopb_owner = None;
         }
     }
+}
+
+pub fn kill_process(pid: Pid) {
+    let curr_thread = get_curr_exec_ctx().0;
+
+    let proc = get_process(pid).unwrap();
+
+    let threads = proc.threads.lock();
+    for weak_thread in threads.iter() {
+        if let Some(thread) = weak_thread.upgrade() {
+            if thread.tid == curr_thread.tid {
+                continue;
+            }
+            thread.state.store(ThreadState::Exiting, Ordering::Release);
+        }
+    }
+    drop(threads);
+
+    //proc.cnode.revoke_all();
+
+    {
+        let addr_space = proc.addr_space.lock();
+        drop(addr_space);
+    }
+}
+
+pub fn kill_all_processes_in_domain(koid: Koid) {
+    process_table().for_each(|proc| {
+        if proc.domain.koid == koid {
+            kill_process(proc.pid)
+        }
+    });
 }
 
 pub fn block_current_task() {

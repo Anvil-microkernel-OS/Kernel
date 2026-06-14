@@ -3,7 +3,7 @@ use core::{cell::UnsafeCell, sync::atomic::{AtomicU32, AtomicU64, Ordering}};
 use alloc::sync::Arc;
 use spin::rwlock::RwLock;
 
-use crate::{arch::amd64::{capability_sys::{cap_resolver::{resolve_process, resolve_thread}, capability::{CapType, Capability, Rights}, cnode::CapIdx}, memory::u_k_boundary::uaccsess::copy_from_user, scheduler::{exec_loader::prepare_new_thread, sleep, stack::{DEFAULT_KERNEL_STACK_SIZE, allocate_kernel_stack}, syscall::{SyscallArguments, SyscallError, get_curr_exec_ctx, threads::info::GeneralGroupRegisters}, task::{AtomicThreadState, Thread, ThreadRegisters, ThreadState}, task_storage::{register_thread, spawn_thread}}}, define_syscall_group};
+use crate::{arch::amd64::{capability_sys::{cap_resolver::{resolve_process, resolve_thread}, capability::{CapType, Capability, Rights}, cnode::CapIdx}, memory::u_k_boundary::uaccsess::copy_from_user, scheduler::{exec_loader::prepare_new_thread, sleep, stack::{DEFAULT_KERNEL_STACK_SIZE, allocate_kernel_stack}, task::{AtomicThreadState, Thread, ThreadRegisters, ThreadState}, task_storage::{register_thread, spawn_thread}}, syscall::{SyscallArguments, SyscallError, get_curr_exec_ctx, threads::info::GeneralGroupRegisters}}, define_syscall_group, early_println};
 
 define_syscall_group! {
     pub enum ThreadActionSyscalls {
@@ -40,7 +40,7 @@ fn handle_thread_create(proc_cap: CapIdx) -> Result<u64, SyscallError> {
 
     register_thread(&new_thread);
 
-    let slot = target_obj.0.cnode.alloc(Capability::new(CapType::Thread(new_thread), Rights::MANAGE));
+    let slot = ctx.1.cnode.alloc(Capability::new(CapType::Thread(new_thread), Rights::MANAGE));
 
     ctx.1.domain.on_thread_created();
 
@@ -50,7 +50,7 @@ fn handle_thread_create(proc_cap: CapIdx) -> Result<u64, SyscallError> {
 fn handle_thread_write_registers(proc_cap: CapIdx, regs_ptr: u64) -> Result<u64, SyscallError> {
     let ctx = get_curr_exec_ctx();
 
-    let target_obj = resolve_thread(&ctx.1.cnode, proc_cap, Rights::WRITE).map_err(|err| err.to_syscall_error())?;
+    let target_obj = resolve_thread(&ctx.1.cnode, proc_cap, Rights::MANAGE).map_err(|err| err.to_syscall_error())?;
 
     if target_obj.0.state.load(Ordering::Acquire) != ThreadState::Configuring {
         return Err(SyscallError::InvalidArgument);

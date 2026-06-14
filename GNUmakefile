@@ -17,6 +17,9 @@ override INIT_SRVS := init_srvs.cpio
 .PHONY: all
 all: $(IMAGE_NAME).iso
 
+.PHONY: debug
+debug: debug-$(KARCH)
+
 .PHONY: all-hdd
 all-hdd: $(IMAGE_NAME).hdd
 
@@ -25,6 +28,20 @@ run: run-$(KARCH)
 
 .PHONY: run-hdd
 run-hdd: run-hdd-$(KARCH)
+
+.PHONY: debug-x86_64
+debug-x86_64:
+	qemu-system-$(KARCH) \
+		-M q35,acpi=on,hpet=on,accel=kvm \
+		-cpu host \
+		-smp cpus=4,sockets=1,cores=4,threads=1 \
+		-drive if=pflash,unit=0,format=raw,file=ovmf/ovmf-code-$(KARCH).fd,readonly=on \
+		-drive if=pflash,unit=1,format=raw,file=ovmf/ovmf-vars-$(KARCH).fd \
+		-cdrom $(IMAGE_NAME).iso \
+		-display sdl \
+		-serial stdio \
+		-s -S \
+		$(QEMUFLAGS)
 
 .PHONY: run-x86_64
 run-x86_64:

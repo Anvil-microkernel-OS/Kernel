@@ -6,12 +6,14 @@ use limine::memory_map::{Entry, EntryType};
 use spin::{Once, RwLock};
 use x86_64::{PhysAddr, VirtAddr, structures::paging::PageTableFlags};
 
-use crate::arch::amd64::{acpi::{hpet::HpetTableParsed, madt::MadTable, main_table_parser::MainTableParser, parsed_table::AcpiParsedTable}, memory::{misc::{align_down, align_up}, pmm::HHDM_OFFSET, vmm::{PAGE_SIZE, kmap_page}}};
+use crate::arch::amd64::{acpi::{dsdt::DsdtTable, fadt::FadtTable, hpet::HpetTableParsed, madt::MadTable, main_table_parser::MainTableParser, parsed_table::AcpiParsedTable}, memory::{misc::{align_down, align_up}, pmm::HHDM_OFFSET, vmm::{PAGE_SIZE, kmap_page}}};
 
 mod parsed_table;
 mod main_table_parser;
 pub mod madt;
 pub mod hpet;
+pub mod fadt;
+pub mod dsdt;
 
 static ACPI_CTX: Once<RwLock<AcpiContext>> = Once::new();
 
@@ -37,6 +39,9 @@ impl AcpiContext {
 
         ctx.load_table::<MadTable>(&acpi);
         ctx.load_table::<HpetTableParsed>(&acpi);
+        ctx.load_table::<FadtTable>(&acpi);
+
+        ctx.tables.insert(TypeId::of::<DsdtTable>(), Box::new(DsdtTable::init(&acpi)));
 
         ctx
     }
@@ -48,6 +53,8 @@ impl AcpiContext {
         if let Some(mapping) = acpi.find_table::<T::Raw>() {
             let parsed = T::parse(mapping);
             self.tables.insert(TypeId::of::<T>(), Box::new(parsed));
+        } else {
+            panic!("No ACPI table found!")
         }
     }
 

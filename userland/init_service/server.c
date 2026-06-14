@@ -10,33 +10,50 @@ typedef struct {
     uint64_t self_domain_cap;
     uint64_t cpio_base_addr;
     uint64_t cpio_size;
+    uint64_t panic_protocol;
+
 } BootInfo_t;
 
 typedef struct {
-    uint64_t self_tcb_cap;
     uint64_t self_vspace_cap;
     uint64_t self_cnode_cap;
-
-    uint64_t test_cap_messaging;
+    uint64_t self_thread_cap;
+    uint64_t self_proc_cap;
+    uint64_t self_domain_cap;
 } UserBootInfo;
 
 #define USER_STACK_TOP  0x7FFFFFFFC000
 #define USER_STACK_SIZE 0x4000
 
-uint64_t allocate_user_stack(uint64_t slave_vspace_cap) {
+typedef enum {
+    NEED_REBOOT = 0,
+    NEED_HLT = 1,
+    NEED_SHUTDOWN = 2,
+    NEED_PANIC_SCREEN = 3
+} panic_protocol_e;
+
+uint64_t allocate_user_stack(uint64_t slave_vspace_cap, UserBootInfo* user_caps) {
     int64_t vmo = vmo_create(USER_STACK_SIZE, VmoPhysical);
+
     if (vmo < 0) {
         printf("Can not create VMO for stack\n");
         return -1;
     }
 
+    int64_t result = vmo_write(vmo, user_caps, USER_STACK_SIZE - sizeof(UserBootInfo), sizeof(UserBootInfo));
+
+    if (result < 0) {
+        printf("Can not write user capabilities to stack!\n");
+        return -1;
+    }
+
     mmap_args_t mmap_args = {
-        .vscape_cap = slave_vspace_cap,
-        .vmo_cap = (uint64_t)vmo,
-        .vaddr = USER_STACK_TOP,              
-        .size = USER_STACK_SIZE,
-        .vmo_offset = 0,
-        .flags = MAP_READ | MAP_WRITE
+            .vscape_cap = slave_vspace_cap,
+            .vmo_cap = (uint64_t)vmo,
+            .vaddr = USER_STACK_TOP - USER_STACK_SIZE,              
+            .size = USER_STACK_SIZE,
+            .vmo_offset = 0,
+            .flags = MAP_READ | MAP_WRITE
     };
 
     int64_t mapped = vma_map(&mmap_args);
@@ -49,7 +66,7 @@ uint64_t allocate_user_stack(uint64_t slave_vspace_cap) {
     return mapped;
 }
 
-int bootstrap_service(BootInfo_t* boot_info, const char* name, uint64_t init_domain_cap) {
+int bootstrap_service(const BootInfo_t* boot_info, const char* name, uint64_t init_domain_cap) {
     uint64_t elf_size = 0;
 
     const uint8_t *elf_data = cpio_find(
@@ -93,7 +110,50 @@ int bootstrap_service(BootInfo_t* boot_info, const char* name, uint64_t init_dom
 
     printf("Mapped elf for service: %s\n", name);
 
-    int64_t stack_bottom_result = 0;//allocate_user_stack(caps.vspce_cap);
+    UserBootInfo user_boot_info = {
+        .self_vspace_cap = caps.vspce_cap,
+        .self_cnode_cap = caps.cnode_cap,
+        .self_thread_cap = thread_cap,
+        .self_proc_cap = caps.proc_cap,
+        .self_domain_cap = init_domain_cap
+    };
+
+    user_boot_info.self_cnode_cap = cap_copy(boot_info->self_cnode_cap, caps.cnode_cap, caps.cnode_cap);
+
+    if(user_boot_info.self_cnode_cap < 0) {
+        printf("Can not cap copy cnode_cap to service: %s\n", name);
+        return -1;
+    }
+
+    user_boot_info.self_vspace_cap = cap_copy(boot_info->self_cnode_cap, caps.cnode_cap, caps.vspce_cap);
+
+    if(user_boot_info.self_vspace_cap < 0) {
+        printf("Can not cap copy vspce_cap to service: %s\n", name);
+        return -1;
+    }
+
+    user_boot_info.self_proc_cap = cap_copy(boot_info->self_cnode_cap, caps.cnode_cap, caps.proc_cap);
+
+    if(user_boot_info.self_proc_cap < 0) {
+        printf("Can not cap copy proc_cap to service: %s\n", name);
+        return -1;
+    }
+
+    user_boot_info.self_thread_cap = cap_copy(boot_info->self_cnode_cap, caps.cnode_cap, thread_cap);
+
+    if(user_boot_info.self_thread_cap < 0) {
+        printf("Can not cap copy thread_cap to service: %s\n", name);
+        return -1;
+    }
+
+    user_boot_info.self_domain_cap = cap_copy(boot_info->self_cnode_cap, caps.cnode_cap, init_domain_cap);
+
+    if(user_boot_info.self_domain_cap < 0) {
+        printf("Can not cap copy domain_cap to service: %s\n", name);
+        return -1;
+    }
+
+    int64_t stack_bottom_result = allocate_user_stack(caps.vspce_cap, &user_boot_info);
 
     if(stack_bottom_result < 0) {
         printf("Can not allocate stack for service: %s\n", name);
@@ -103,13 +163,15 @@ int bootstrap_service(BootInfo_t* boot_info, const char* name, uint64_t init_dom
     uint64_t entry_point = elf_result;
     general_purpose_registers_t regs;
     regs.rip = entry_point;
-    regs.rsp = stack_bottom_result + USER_STACK_SIZE;
+    regs.rsp = USER_STACK_TOP - sizeof(UserBootInfo);
+    regs.rdi = USER_STACK_TOP - sizeof(UserBootInfo);
 
     if (write_tregs(thread_cap, &regs)) {
         printf("Can not write registers for service: %s\n", name);
         return -1;
     }
-
+    //exit_proc(boot_info->self_proc_cap, -1);
+    run_proc(caps.proc_cap, thread_cap);
     return 0;
 }
 
@@ -119,7 +181,7 @@ const char* bootstrap_services[1] = {
 };
 
 __attribute__((noreturn, section(".text._start")))
-void _start(BootInfo_t* boot_info) {
+void _start(const BootInfo_t* boot_info) {
     int64_t ret;
 
     printf("Init process started!\n");

@@ -1,7 +1,8 @@
+use alloc::vec;
 use spin::Once;
 use x86_64::instructions;
 
-use crate::{arch::amd64::{acpi::init_acpi, apic::{disable_pic, init_lapic, ioapic_manager::ioapic_manager_init}, cpu::{cpuid::{CpuIdInfoFull, get_cpuid_full}, smp::{percpu::{get_region_by_id, init_percpu_regions}, startup::{early_setup_percpu_bsp, smp_startup}}}, gdt::init_bootstrap_gdt, interrupts::idt::init_idt, memory::{MemoryInitInfo, init_memory_subsys, u_k_boundary::uaccsess::enable_smep}, scheduler::global_init_scheduler, timer::initialize_hpet}, bootinfo::BootInfo, early_println, isolation::init_root_domain};
+use crate::{arch::amd64::{acpi::init_acpi, apic::{disable_pic, init_lapic, ioapic_manager::ioapic_manager_init}, cpu::{cpuid::{CpuIdInfoFull, get_cpuid_full}, smp::{percpu::{get_region_by_id, init_percpu_regions}, startup::{early_setup_percpu_bsp, smp_startup}}}, gdt::init_bootstrap_gdt, interrupts::idt::init_idt, memory::{MemoryInitInfo, init_memory_subsys, u_k_boundary::uaccsess::enable_smap_smep_prot}, scheduler::global_init_scheduler, timer::initialize_hpet}, bootinfo::BootInfo, early_println, isolation::init_root_domain};
 
 pub mod serial;
 pub mod cpu;
@@ -15,8 +16,9 @@ mod timer;
 pub mod scheduler;
 pub mod ipc;
 pub mod capability_sys;
+mod syscall;
 
-static CPUID_INFO: Once<CpuIdInfoFull> = Once::new();
+pub static CPUID_INFO: Once<CpuIdInfoFull> = Once::new();
 
 fn early_startup() {
     instructions::interrupts::disable();
@@ -42,7 +44,6 @@ fn early_startup() {
         early_println!("[CPUID] Fetching CPUID information...");
         get_cpuid_full()
     });
-
 
     early_println!("{}", CPUID_INFO.get().expect("Not initialized"));
     early_println!("Cpu submodule intialized!");
@@ -76,17 +77,17 @@ fn early_startup() {
     early_println!("IOAPIC initialized!");
 
     early_println!("Initializing root domain...");
-    init_root_domain();
+    init_root_domain(Some(vec![1]));
     early_println!("Root domain initialized!");
 
     early_println!("Prepare scheduler...");
     global_init_scheduler();
     early_println!("Scheduler prepared!");
 
-    if !enable_smep() {
-        early_println!("SMEP NOT DETECTED :(");
+    if !enable_smap_smep_prot() {
+        early_println!("SMAP SMEP NOT DETECTED :(");
     } else {
-        early_println!("SMEP enabled!");
+        early_println!("SMAP SMEP enabled!");
     }
 
     instructions::interrupts::enable();
