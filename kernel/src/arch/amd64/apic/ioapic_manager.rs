@@ -1,7 +1,10 @@
-use alloc::{collections::btree_map::BTreeMap, vec::Vec};
+use alloc::vec::Vec;
 use spin::{Mutex, Once};
-
-use crate::{arch::amd64::{acpi::{get_acpi_tables, madt::MadTable}, apic::ioapic::{IOAPIC_REDIRECTION_TABLE_REGISTER_OFFSET, IOAPICRedirectionTableRegister, IOApic}}, early_println};
+use x2apic::ioapic::{IrqFlags, IrqMode};
+use crate::arch::amd64::{
+    acpi::{get_acpi_tables, madt::MadTable},
+    apic::ioapic::IOApic,
+};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DeliveryMode {
@@ -26,15 +29,6 @@ pub enum TriggerMode {
 }
 
 #[derive(Clone, Copy, Debug)]
-pub struct IrqRouting {
-    pub vector: u8,
-    pub dest_apic_id: u8,
-    pub delivery_mode: DeliveryMode,
-    pub polarity: Polarity,
-    pub trigger: TriggerMode,
-}
-
-#[derive(Clone, Copy, Debug)]
 pub struct IsoEntry {
     pub legacy_irq: u8,
     pub gsi: u32,
@@ -48,22 +42,18 @@ pub enum IrqError {
     NoFreeVectors,
     AlreadyConfigured(u32),
     PinOutOfRange { pin: u8, max: u32 },
-    VectorNotConfigured(u8)
+    VectorNotConfigured(u8),
 }
 
 const IRQ_VECTOR_BASE: u8 = 0x30;
 const IRQ_VECTOR_END: u8 = 0xFE;
 
-pub struct IoapicManager {
-    ioapics: Vec<Mutex<IOApic>>,
-
-    isos: Vec<IsoEntry>,
-
-    routes: Mutex<alloc::collections::BTreeMap<u32, IrqRouting>>,
-    
-    vectors: Mutex<VectorAllocator>,
-
-    vector_to_gsi: Mutex<[Option<u32>; 256]>,
+#[derive(Clone, Copy, Debug)]
+struct GsiMapping {
+    gsi: u32,
+    vector: u8,
+    pin: u8,
+    ioapic_idx: usize,
 }
 
 struct VectorAllocator {
@@ -85,8 +75,15 @@ impl VectorAllocator {
     }
 
     fn release(&mut self, _vector: u8) {
-
+        // TODO: bitmap для переиспользования
     }
+}
+
+pub struct IoapicManager {
+    ioapics: Vec<IOApic>,
+    isos: Vec<IsoEntry>,
+    mappings: Mutex<Vec<GsiMapping>>,
+    allocator: Mutex<VectorAllocator>,
 }
 
 impl IoapicManager {
@@ -95,211 +92,142 @@ impl IoapicManager {
         let madt = acpi.get_table::<MadTable>().expect("No MADT");
 
         let ioapics = madt.ioapics.iter()
-            .map(|def| Mutex::new(IOApic::new(def.id, def.gsi_base, def.address)))
+            .map(|def| IOApic::new(def.id, def.gsi_base, def.address))
             .collect();
 
         let isos = madt.iso.iter()
-            .map(|iso| {
+            .map(|ovr| {
+                let (polarity, trigger) = parse_mps_inti_flags(ovr.flags);
                 IsoEntry {
-                    legacy_irq: iso.irq,
-                    gsi: iso.gsi,
-                    polarity: parse_polarity(iso.flags, iso.irq),
-                    trigger:  parse_trigger(iso.flags, iso.irq),
+                    legacy_irq: ovr.irq,
+                    gsi: ovr.gsi,
+                    polarity,
+                    trigger,
                 }
             })
             .collect();
 
-        let manager = Self {
+        Self {
             ioapics,
             isos,
-            routes: Mutex::new(alloc::collections::BTreeMap::new()),
-            vectors: Mutex::new(VectorAllocator::new()),
-            vector_to_gsi: Mutex::new([None; 256])
-        };
-
-        manager.reset_all_entries();
-
-        manager
-    }
-
-    fn locate(&self, gsi: u32) -> Result<(spin::MutexGuard<'_, IOApic>, u8), IrqError> {
-        for ioapic in &self.ioapics {
-            let guard = ioapic.lock();
-            if let Some(pin) = guard.gsi_to_pin(gsi) {
-                return Ok((guard, pin));
-            }
+            mappings: Mutex::new(Vec::new()),
+            allocator: Mutex::new(VectorAllocator::new()),
         }
-        Err(IrqError::GsiNotHandled(gsi))
     }
 
-    pub fn configure_irq(&self, gsi: u32, routing: IrqRouting) -> Result<(), IrqError> {
+    pub fn route_gsi(
+        &self,
+        gsi: u32,
+        dest: u8,
+        mode: IrqMode,
+        flags: IrqFlags,
+    ) -> Result<u8, IrqError> {
         {
-            let routes = self.routes.lock();
-            if routes.contains_key(&gsi) {
+            let mappings = self.mappings.lock();
+            if mappings.iter().any(|m| m.gsi == gsi) {
                 return Err(IrqError::AlreadyConfigured(gsi));
             }
         }
 
-        let (ioapic, pin) = self.locate(gsi)?;
+        let (ioapic_idx, ioapic, pin) = self.find_ioapic_for_gsi(gsi)?;
 
-        let entry = IOAPICRedirectionTableRegister::new()
-            .with_interrupt_vector(routing.vector)
-            .with_delivery_mode(routing.delivery_mode as u8)
-            .with_destination_mode(false) // physical
-            .with_interrupt_input_pin_polarity(matches!(routing.polarity, Polarity::ActiveLow))
-            .with_trigger_mode(matches!(routing.trigger, TriggerMode::Level))
-            .with_interrupt_mask(true)
-            .with_destination_field(routing.dest_apic_id);
+        let vector = self.allocator.lock().alloc()
+            .ok_or(IrqError::NoFreeVectors)?;
 
-        ioapic.write_ioredtbl(pin, entry);
-        drop(ioapic); 
+        ioapic.setup_irq(pin, vector, mode, flags, dest);
 
-        self.routes.lock().insert(gsi, routing);
-        self.vector_to_gsi.lock()[routing.vector as usize] = Some(gsi);
+        self.mappings.lock().push(GsiMapping {
+            gsi,
+            vector,
+            pin,
+            ioapic_idx,
+        });
+
+        Ok(vector)
+    }
+
+    pub fn route_legacy_irq(&self, irq: u8, dest: u8) -> Result<u8, IrqError> {
+        let (gsi, trigger, polarity) = match self.isos.iter()
+            .find(|iso| iso.legacy_irq == irq)
+        {
+            Some(iso) => (iso.gsi, iso.trigger, iso.polarity),
+            None => (irq as u32, TriggerMode::Edge, Polarity::ActiveHigh),
+        };
+
+        let flags = to_irq_flags(trigger, polarity) | IrqFlags::MASKED;
+        self.route_gsi(gsi, dest, IrqMode::Fixed, flags)
+    }
+
+    pub fn enable_gsi(&self, gsi: u32) -> Result<(), IrqError> {
+        let (_, ioapic, pin) = self.find_ioapic_for_gsi(gsi)?;
+        ioapic.enable_irq(pin);
         Ok(())
     }
 
-    pub fn unconfigure_irq(&self, gsi: u32) -> Result<(), IrqError> {
-        let (ioapic, pin) = self.locate(gsi)?;
-        ioapic.mask_pin(pin);
-        let zero_entry = IOAPICRedirectionTableRegister::new()
-            .with_interrupt_mask(true);
-        ioapic.write_ioredtbl(pin, zero_entry);
-        drop(ioapic);
-
-        let removed = self.routes.lock().remove(&gsi);
-        if let Some(routing) = removed {
-            self.vector_to_gsi.lock()[routing.vector as usize] = None;
-            self.vectors.lock().release(routing.vector);
-        }
+    pub fn disable_gsi(&self, gsi: u32) -> Result<(), IrqError> {
+        let (_, ioapic, pin) = self.find_ioapic_for_gsi(gsi)?;
+        ioapic.disable_irq(pin);
         Ok(())
     }
 
-    pub fn gsi_to_vector(&self, gsi: u32) -> Option<u8> {
-        self.routes.lock().get(&gsi).map(|r| r.vector)
-    }
-
-    pub fn vector_to_gsi(&self, vector: u8) -> Option<u32> {
-        self.vector_to_gsi.lock()[vector as usize]
-    }
-    
     pub fn mask_by_vector(&self, vector: u8) -> Result<(), IrqError> {
-        let gsi = self.vector_to_gsi(vector)
+        let gsi = self.gsi_for_vector(vector)
             .ok_or(IrqError::VectorNotConfigured(vector))?;
-        self.mask_irq(gsi)
+        self.disable_gsi(gsi)
     }
 
-    pub fn mask_irq(&self, gsi: u32) -> Result<(), IrqError> {
-        let (ioapic, pin) = self.locate(gsi)?;
-        ioapic.mask_pin(pin);
-        Ok(())
+    pub fn unmask_by_vector(&self, vector: u8) -> Result<(), IrqError> {
+        let gsi = self.gsi_for_vector(vector)
+            .ok_or(IrqError::VectorNotConfigured(vector))?;
+        self.enable_gsi(gsi)
     }
 
-    pub fn unmask_irq(&self, gsi: u32) -> Result<(), IrqError> {
-        let (ioapic, pin) = self.locate(gsi)?;
-        ioapic.unmask_pin(pin);
-        Ok(())
+    pub fn gsi_for_vector(&self, vector: u8) -> Option<u32> {
+        self.mappings.lock().iter()
+            .find(|m| m.vector == vector)
+            .map(|m| m.gsi)
     }
 
-    pub fn set_affinity(&self, gsi: u32, dest_apic_id: u8) -> Result<(), IrqError> {
-        let (ioapic, pin) = self.locate(gsi)?;
-        let reg_index = IOAPIC_REDIRECTION_TABLE_REGISTER_OFFSET + pin * 2;
-        let raw = ioapic.read_64b_from_reg(reg_index);
-        let mut entry = IOAPICRedirectionTableRegister::from(raw);
-        entry.set_destination_field(dest_apic_id);
-        ioapic.write_ioredtbl(pin, entry);
-        drop(ioapic);
-
-        if let Some(routing) = self.routes.lock().get_mut(&gsi) {
-            routing.dest_apic_id = dest_apic_id;
-        }
-        Ok(())
+    pub fn vector_for_gsi(&self, gsi: u32) -> Option<u8> {
+        self.mappings.lock().iter()
+            .find(|m| m.gsi == gsi)
+            .map(|m| m.vector)
     }
 
-    pub fn configure_legacy_irq(
-        &self,
-        legacy_irq: u8,
-        vector: u8,
-        dest_apic_id: u8,
-    ) -> Result<u32, IrqError> {
-        let iso = self.lookup_iso(legacy_irq);
-        let gsi = iso.map(|i| i.gsi).unwrap_or(legacy_irq as u32);
-        let polarity = iso.map(|i| i.polarity).unwrap_or(Polarity::ActiveHigh);
-        let trigger  = iso.map(|i| i.trigger ).unwrap_or(TriggerMode::Edge);
-
-        self.configure_irq(gsi, IrqRouting {
-            vector,
-            dest_apic_id,
-            delivery_mode: DeliveryMode::Fixed,
-            polarity,
-            trigger,
-        })?;
-
-        Ok(gsi)
-    }
-
-    pub fn configure_irq_alloc_vector(
-        &self,
-        gsi: u32,
-        dest_apic_id: u8,
-        delivery_mode: DeliveryMode,
-        polarity: Polarity,
-        trigger: TriggerMode,
-    ) -> Result<u8, IrqError> {
-        let vector = self.vectors.lock().alloc().ok_or(IrqError::NoFreeVectors)?;
-        match self.configure_irq(gsi, IrqRouting {
-            vector,
-            dest_apic_id,
-            delivery_mode,
-            polarity,
-            trigger,
-        }) {
-            Ok(()) => Ok(vector),
-            Err(e) => {
-                self.vectors.lock().release(vector);
-                Err(e)
+    fn find_ioapic_for_gsi(&self, gsi: u32) -> Result<(usize, &IOApic, u8), IrqError> {
+        for (idx, ioapic) in self.ioapics.iter().enumerate() {
+            if ioapic.handles_gsi(gsi) {
+                return Ok((idx, ioapic, ioapic.gsi_to_pin(gsi)));
             }
         }
-    }
-
-    fn reset_all_entries(&self) {
-        for ioapic in &self.ioapics {
-            let g = ioapic.lock();
-            let n = g.num_redir_entries();
-            for pin in 0..n {
-                let zero = IOAPICRedirectionTableRegister::new()
-                    .with_interrupt_mask(true);  // explicit
-                g.write_ioredtbl(pin as u8, zero);
-            }
-        }
-    }
-
-    fn lookup_iso(&self, legacy_irq: u8) -> Option<&IsoEntry> {
-        self.isos.iter().find(|i| i.legacy_irq == legacy_irq)
+        Err(IrqError::GsiNotHandled(gsi))
     }
 }
 
-fn parse_polarity(flags: u16, source: u8) -> Polarity {
-    match flags & 0b11 {
-        0b00 => bus_default_polarity(source),
+fn to_irq_flags(trigger: TriggerMode, polarity: Polarity) -> IrqFlags {
+    let mut flags = IrqFlags::empty();
+    if let TriggerMode::Level = trigger {
+        flags |= IrqFlags::LEVEL_TRIGGERED;
+    }
+    if let Polarity::ActiveLow = polarity {
+        flags |= IrqFlags::LOW_ACTIVE;
+    }
+    flags
+}
+
+fn parse_mps_inti_flags(flags: u16) -> (Polarity, TriggerMode) {
+    let polarity = match flags & 0b11 {
         0b01 => Polarity::ActiveHigh,
         0b11 => Polarity::ActiveLow,
-        _    => Polarity::ActiveHigh, 
-    }
-}
-
-fn parse_trigger(flags: u16, source: u8) -> TriggerMode {
-    match (flags >> 2) & 0b11 {
-        0b00 => bus_default_trigger(source),
+        _    => Polarity::ActiveHigh,  
+    };
+    let trigger = match (flags >> 2) & 0b11 {
         0b01 => TriggerMode::Edge,
         0b11 => TriggerMode::Level,
-        _    => TriggerMode::Edge,
-    }
+        _    => TriggerMode::Edge,    
+    };
+    (polarity, trigger)
 }
-
-fn bus_default_polarity(_source: u8) -> Polarity { Polarity::ActiveHigh }
-fn bus_default_trigger(_source: u8) -> TriggerMode { TriggerMode::Edge }
-
 
 static MANAGER: Once<IoapicManager> = Once::new();
 

@@ -1,4 +1,4 @@
-use core::{arch::naked_asm, cell::UnsafeCell, sync::atomic::AtomicU64};
+use core::{arch::naked_asm, cell::UnsafeCell, sync::atomic::{AtomicI32, AtomicU32, AtomicU64}};
 use alloc::{string::String, sync::Arc};
 use spin::{Mutex, rwlock::RwLock};
 use x86_64::{PhysAddr, VirtAddr, instructions::interrupts, registers::control::Cr3, structures::paging::{Mapper, OffsetPageTable, Page, PageTable, PageTableFlags, PhysFrame, Size4KiB}};
@@ -11,7 +11,7 @@ use crate::{arch::amd64::{
     }, scheduler::{
         addr_space::AddrSpace,
         stack::{DEFAULT_KERNEL_STACK_SIZE, allocate_kernel_stack},
-        task::{AtomicThreadState, Pid, Process, Thread, ThreadRegisters, ThreadState, Tid},
+        task::{AtomicThreadState, Pid, Process, RunsOnApicId, Thread, ThreadRegisters, ThreadState, Tid},
     }
 }, early_println, isolation::{domain::{self, Domain}, root_domain}};
 
@@ -148,6 +148,7 @@ pub fn make_init_task(
             ..Default::default()
         }),
         state: AtomicThreadState::new(ThreadState::Ready),
+        runs_on: RunsOnApicId::new_undefined()
     });
 
     let mut boot_info = make_init_caps(&process, &thread, &process.cnode, root_domain);
@@ -217,6 +218,7 @@ pub fn make_kernel_task(pid: Pid, tid: Tid, name: &'static str, entry_point: u64
             ..ThreadRegisters::default()
         }),
         state: AtomicThreadState::new(ThreadState::Ready),
+        runs_on: RunsOnApicId::new_undefined()
     };
 
     (process, thread)

@@ -298,42 +298,6 @@ impl Lapic {
         }
     }
 
-    pub fn write_icr_high(&self, val: u32) {
-        match &self.mode {
-            LapicMode::Xapic { registers } => {
-                registers.lapic_icr_high().write(val);
-            }
-            LapicMode::X2apic => {
-            }
-        }
-    }
-
-    pub fn send_ipi_x2apic(&self, dest_apic_id: u32, vector: u8) {
-        match &self.mode {
-            LapicMode::Xapic { .. } => {
-                panic!("send_ipi_x2apic called on xAPIC mode");
-            }
-            LapicMode::X2apic => {
-                let icr = (vector as u64)
-                    | ((dest_apic_id as u64) << 32);
-                unsafe { Msr::new(X2APIC_ICR).write(icr); }
-            }
-        }
-    }
-
-    pub fn send_ipi_broadcast_x2apic(&self, vector: u8) {
-        match &self.mode {
-            LapicMode::Xapic { .. } => {
-                panic!("send_ipi_broadcast_x2apic called on xAPIC mode");
-            }
-            LapicMode::X2apic => {
-                let icr = (vector as u64)
-                    | (0b11 << 18); //
-                unsafe { Msr::new(X2APIC_ICR).write(icr); }
-            }
-        }
-    }
-
     pub fn self_ipi_x2apic(&self, vector: u8) {
         match &self.mode {
             LapicMode::Xapic { .. } => {
@@ -353,6 +317,62 @@ impl Lapic {
         match &self.mode {
             LapicMode::Xapic { registers } => registers.address != 0,
             LapicMode::X2apic => true, 
+        }
+    }
+
+    pub fn send_ipi(&self, dest_apic_id: u32, vector: u8) {
+        match &self.mode {
+            LapicMode::Xapic { registers } => {
+                self.wait_icr_idle(registers);
+                registers.lapic_icr_high().write(dest_apic_id << 24);
+                registers.lapic_icr_low().write(
+                    vector as u32 | ICR_DELIVERY_FIXED | ICR_DEST_PHYSICAL
+                    | ICR_LEVEL_ASSERT | ICR_TRIGGER_EDGE
+                );
+            }
+            LapicMode::X2apic => {
+                let icr = (vector as u64) | ((dest_apic_id as u64) << 32);
+                unsafe { Msr::new(X2APIC_ICR).write(icr); }
+            }
+        }
+    }
+
+    pub fn send_ipi_others(&self, vector: u8) {
+        match &self.mode {
+            LapicMode::Xapic { registers } => {
+                self.wait_icr_idle(registers);
+                registers.lapic_icr_high().write(0);
+                registers.lapic_icr_low().write(
+                    vector as u32 | ICR_DELIVERY_FIXED
+                    | ICR_DEST_ALL_EX_SELF | ICR_LEVEL_ASSERT | ICR_TRIGGER_EDGE
+                );
+            }
+            LapicMode::X2apic => {
+                let icr = (vector as u64) | (ICR_DEST_ALL_EX_SELF as u64);
+                unsafe { Msr::new(X2APIC_ICR).write(icr); }
+            }
+        }
+    }
+
+    pub fn send_self_ipi(&self, vector: u8) {
+        match &self.mode {
+            LapicMode::Xapic { registers } => {
+                self.wait_icr_idle(registers);
+                registers.lapic_icr_high().write(0);
+                registers.lapic_icr_low().write(
+                    vector as u32 | ICR_DELIVERY_FIXED | ICR_DEST_SELF
+                    | ICR_LEVEL_ASSERT | ICR_TRIGGER_EDGE
+                );
+            }
+            LapicMode::X2apic => {
+                unsafe { Msr::new(X2APIC_SELF_IPI).write(vector as u64); }
+            }
+        }
+    }
+
+    fn wait_icr_idle(&self, registers: &LAPICRegisters) {
+        while registers.lapic_icr_low().read() & ICR_DELIVERY_STATUS_PENDING != 0 {
+            core::hint::spin_loop();
         }
     }
 }

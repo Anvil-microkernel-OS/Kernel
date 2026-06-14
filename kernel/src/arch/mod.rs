@@ -8,10 +8,11 @@ pub fn hlt_loop() -> ! {
     current::cpu::hlt_loop();
 }
 
-pub fn early_arch_init() {
+pub fn phase1_init_platform_specific() {
     current::init_arch();
 }
 
-pub fn final_arch_init() -> ! {
+pub fn phase2_init_platform_specific() -> ! {
     current::final_arch_init()
 }
+

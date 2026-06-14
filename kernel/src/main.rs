@@ -7,7 +7,7 @@ use alloc::{format, vec};
 use core::fmt::Write;
 use crate::arch::amd64::scheduler::exec_loader::make_init_task;
 use crate::arch::amd64::scheduler::task_storage::{register_process, register_thread, spawn_thread};
-use crate::arch::{early_arch_init, final_arch_init};
+use crate::arch::{phase1_init_platform_specific, phase2_init_platform_specific};
 use crate::bootinfo::BootInfo;
 use crate::cpio_parser::cpio_find;
 use crate::early_print::fb_printer::{RENDERER, ScrollingFbTextRenderer};
@@ -76,7 +76,7 @@ unsafe extern "C" fn kmain() -> ! {
     
     print_hello_banner();
 
-    early_arch_init();
+    phase1_init_platform_specific();
 
     early_println!("Detecting CPIO...");
 
@@ -100,7 +100,7 @@ unsafe extern "C" fn kmain() -> ! {
 
     early_println!("Post init arch...");
 
-    final_arch_init()
+    phase2_init_platform_specific()
 }
 
 #[panic_handler]

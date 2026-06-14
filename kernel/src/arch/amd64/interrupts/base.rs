@@ -70,7 +70,6 @@ extern "C" fn base_trap(stack_frame: *const InterruptFrame) {
         }
     }
 
-    //TODO: ACK unhandled irq & mask it.
     early_println!("Unhandled irq interrupt! Code: {}. Ack & Mask", vec);
     PercpuLapic::get().lapic.eoi();
     if let Err(e) = ioapic_manager().mask_by_vector(vec as u8) {

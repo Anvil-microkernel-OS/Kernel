@@ -60,6 +60,34 @@ impl ThreadTable {
     }
 }
 
+pub struct DeadQueue {
+    inner: Mutex<BTreeMap<Tid, Arc<Thread>>>,
+}
+
+impl DeadQueue {
+    pub fn new() -> Self {
+        Self { inner: Mutex::new(BTreeMap::new()) }
+    }
+
+    pub fn insert(&self, thread: Arc<Thread>) {
+        self.inner.lock().insert(thread.tid, thread);
+    }
+
+    pub fn get(&self, tid: Tid) -> Option<Arc<Thread>> {
+        self.inner.lock().get(&tid).cloned()
+    }
+
+    pub fn remove(&self, tid: Tid) -> Option<Arc<Thread>> {
+        self.inner.lock().remove(&tid)
+    }
+
+    pub fn for_each<F: FnMut(&Arc<Thread>)>(&self, mut f: F) {
+        for thread in self.inner.lock().values() {
+            f(thread);
+        }
+    }
+}
+
 pub struct GlobalRunQueue {
     inner: Mutex<VecDeque<Arc<Thread>>>,
 }
@@ -97,15 +125,23 @@ impl GlobalRunQueue {
 static PROCESS_TABLE:    Once<ProcessTable>    = Once::new();
 static THREAD_TABLE:     Once<ThreadTable>     = Once::new();
 static GLOBAL_RUN_QUEUE: Once<GlobalRunQueue>  = Once::new();
+static DEAD_QUEUE: Once<DeadQueue>        = Once::new();
 
 #[inline] pub fn process_table()  -> &'static ProcessTable   { PROCESS_TABLE.get().expect("process table not initialized") }
 #[inline] pub fn thread_table()   -> &'static ThreadTable    { THREAD_TABLE.get().expect("thread table not initialized") }
 #[inline] pub fn global_queue()   -> &'static GlobalRunQueue { GLOBAL_RUN_QUEUE.get().expect("global run queue not initialized") }
+#[inline] pub fn dead_queue()   -> &'static DeadQueue { DEAD_QUEUE.get().expect("global run queue not initialized") }
 
 pub fn initialize_task_storage() {
     PROCESS_TABLE.call_once(ProcessTable::new);
     THREAD_TABLE.call_once(ThreadTable::new);
     GLOBAL_RUN_QUEUE.call_once(GlobalRunQueue::new);
+    DEAD_QUEUE.call_once(DeadQueue::new);
+}
+
+pub fn move_to_dead_queue(tid: Tid) {
+    let thread = thread_table().remove(tid).unwrap_or_else(|| panic!("NO THREAD WITH TID: {}", tid));
+    DEAD_QUEUE.get().unwrap().insert(thread);
 }
 
 pub fn register_process(process: Arc<Process>) -> Pid {

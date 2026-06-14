@@ -3,7 +3,7 @@ use core::{cell::UnsafeCell, sync::atomic::{AtomicU32, AtomicU64, Ordering}};
 use alloc::sync::Arc;
 use spin::rwlock::RwLock;
 
-use crate::{arch::amd64::{capability_sys::{cap_resolver::{resolve_process, resolve_thread}, capability::{CapType, Capability, Rights}, cnode::CapIdx}, memory::u_k_boundary::uaccsess::copy_from_user, scheduler::{exec_loader::prepare_new_thread, sleep, stack::{DEFAULT_KERNEL_STACK_SIZE, allocate_kernel_stack}, task::{AtomicThreadState, Thread, ThreadRegisters, ThreadState}, task_storage::{register_thread, spawn_thread}}, syscall::{SyscallArguments, SyscallError, get_curr_exec_ctx, threads::info::GeneralGroupRegisters}}, define_syscall_group, early_println};
+use crate::{arch::amd64::{capability_sys::{cap_resolver::{resolve_process, resolve_thread}, capability::{CapType, Capability, Rights}, cnode::CapIdx}, memory::u_k_boundary::uaccsess::copy_from_user, scheduler::{exec_loader::prepare_new_thread, sleep, stack::{DEFAULT_KERNEL_STACK_SIZE, allocate_kernel_stack}, task::{AtomicThreadState, RunsOnApicId, Thread, ThreadRegisters, ThreadState}, task_storage::{register_thread, spawn_thread}}, syscall::{SyscallArguments, SyscallError, get_curr_exec_ctx, threads::info::GeneralGroupRegisters}}, define_syscall_group, early_println};
 
 define_syscall_group! {
     pub enum ThreadActionSyscalls {
@@ -33,7 +33,8 @@ fn handle_thread_create(proc_cap: CapIdx) -> Result<u64, SyscallError> {
         registers: UnsafeCell::new(ThreadRegisters {
             ..ThreadRegisters::default()
         }),
-        state: AtomicThreadState::new(ThreadState::Configuring)
+        state: AtomicThreadState::new(ThreadState::Configuring),
+        runs_on: RunsOnApicId::new_undefined()
     });
 
     target_obj.0.threads.lock().push(Arc::downgrade(&new_thread));

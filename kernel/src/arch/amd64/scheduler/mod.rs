@@ -17,20 +17,22 @@ use crate::{
         scheduler::{
             cpu_local::ExecCpu,
             exec_loader::make_kernel_task,
-            task::{Pid, Process, Thread, ThreadState, Tid},
+            task::{Pid, Process, Thread, ThreadState, Tid, UNDEFINED_APIC_RUNNER_ID},
             task_storage::{
-                get_process, get_thread, initialize_task_storage, process_table, steal_from_global, thread_table, wake_thread
+                get_process, get_thread, initialize_task_storage, move_to_dead_queue, process_table, steal_from_global, thread_table, wake_thread
             },
         }, syscall::{get_curr_exec_ctx, init_syscall_subsystem, set_per_cpu_TOP_OF_KERNEL_STACK},
-    }, define_per_cpu_struct, early_println, irq, isolation::domain::Koid
+    }, define_per_cpu_struct, irq, isolation::domain::Koid
 };
+
+pub const IPI_RESCHEDULE_VECTOR: u8 = 0xF0;
 
 static CPU_NUM:    AtomicU64 = AtomicU64::new(0);
 static TICK_COUNT: AtomicU64 = AtomicU64::new(0);
 
 struct CpuDescriptorStorage {
     cpus: Vec<UnsafeCell<ExecCpu>>,
-    idle_processes: Vec<Arc<Process>>
+    kernel_processes: Vec<Arc<Process>>
 }
 
 unsafe impl Sync for CpuDescriptorStorage {}
@@ -39,16 +41,17 @@ impl CpuDescriptorStorage {
     pub fn new(n_cpus: usize) -> Self {
         initialize_task_storage();
         let mut cpus = Vec::with_capacity(n_cpus);
-        let mut idle_processes = Vec::with_capacity(n_cpus);
+        let mut kernel_processes = Vec::with_capacity(n_cpus);
         
         for cpu_id in 0..n_cpus {
-            let (proc, thread) = make_kernel_task(
+            let (idle_proc, idle_thread) = make_kernel_task(
                 cpu_id as Pid, cpu_id as Tid, "idle", idle_task as u64);
-            idle_processes.push(proc);
-            cpus.push(UnsafeCell::new(ExecCpu::new(thread)));
+                
+            kernel_processes.push(idle_proc);
+            cpus.push(UnsafeCell::new(ExecCpu::new(idle_thread)));
         }
         
-        Self { cpus, idle_processes }
+        Self { cpus, kernel_processes }
     }
 
     pub fn cpu(&self, cpu: usize) -> &ExecCpu {
@@ -186,6 +189,26 @@ pub fn kill_process(pid: Pid) {
     }
 }
 
+pub fn kill_thread(tid: Tid) {
+    let thread = get_thread(tid).unwrap_or_else(|| panic!("thread with tid: {} not found!", tid));
+    thread.state.store(ThreadState::Exiting, Ordering::Release);
+
+    let lapic = PercpuLapic::get();
+    let cpu = thread.runs_on.runs_on();
+
+    match cpu {
+        -1 => {
+            move_to_dead_queue(tid);
+        }
+        id if id == lapic.lapic.id() as i32 => {
+            lapic.lapic.send_self_ipi(IPI_RESCHEDULE_VECTOR);
+        }
+        id => {
+            lapic.lapic.send_ipi(id as u32, IPI_RESCHEDULE_VECTOR);
+        }
+    }
+}
+
 pub fn kill_all_processes_in_domain(koid: Koid) {
     process_table().for_each(|proc| {
         if proc.domain.koid == koid {
@@ -300,6 +323,12 @@ extern "C" fn idle_task() -> ! {
     }
 }
 
+extern "C" fn reaper_task() -> ! {
+    loop {
+
+    }
+}
+
 fn process_tick() {
     if PerCpuSchedulerData::get().in_rescheduling { return; }
 
@@ -307,6 +336,14 @@ fn process_tick() {
     let my_desc  = PerCpuSchedulerData::get().descriptors.cpu_mut(my_id);
     let curr_ptr = my_desc.get_curr_task();
     let next_task = my_desc.tasks.pop();
+
+    if !curr_ptr.is_null() {
+        unsafe {
+            if (*curr_ptr).state.load(Ordering::Relaxed) == ThreadState::Exiting {
+
+            }
+        }
+    }
 
     match (curr_ptr.is_null(), next_task) {
         (true, None) => {}
@@ -316,6 +353,8 @@ fn process_tick() {
         (true, Some(next)) => {
             let next_ptr = Arc::into_raw(next) as *mut Thread;
             unsafe {
+                (*next_ptr).runs_on.set_new_runner(my_id as i32);
+
                 (*next_ptr).state.store(ThreadState::Running, Ordering::Release);
                 my_desc.set_curr_task(next_ptr);
                 PerCpuSchedulerData::get_mut().curr_thread_id = (*next_ptr).tid;
@@ -337,6 +376,9 @@ fn process_tick() {
             let next_ptr = Arc::into_raw(next) as *mut Thread;
             unsafe {
                 let task_rsp_ptr = addr_of!((*(*curr_ptr).registers.get()).rsp);
+
+                (*curr_ptr).runs_on.set_new_runner(UNDEFINED_APIC_RUNNER_ID);
+                (*next_ptr).runs_on.set_new_runner(my_id as i32);
 
                 (*curr_ptr).state.store(ThreadState::Ready, Ordering::Release);
                 let curr_arc = Arc::from_raw(curr_ptr);
@@ -381,6 +423,11 @@ pub(super) unsafe extern "C" fn switch_to_task(
         "ret",
     );
 }
+
+irq!(0xF0, handle_resсhedule_ipi, |_stack| {
+    PercpuLapic::get().lapic.eoi();
+    process_tick();
+});
 
 irq!(0x30, scheduler_tick_irq, |_stack| {
     TICK_COUNT.fetch_add(1, Ordering::Relaxed);
