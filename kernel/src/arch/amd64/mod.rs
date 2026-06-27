@@ -1,104 +1,74 @@
-use alloc::vec;
-use spin::Once;
-use x86_64::instructions;
-
-use crate::{arch::amd64::{acpi::init_acpi, apic::{disable_pic, init_lapic, ioapic_manager::ioapic_manager_init}, cpu::{cpuid::{CpuIdInfoFull, get_cpuid_full}, smp::{percpu::{get_region_by_id, init_percpu_regions}, startup::{early_setup_percpu_bsp, smp_startup}}}, gdt::init_bootstrap_gdt, interrupts::idt::init_idt, memory::{MemoryInitInfo, init_memory_subsys, u_k_boundary::uaccsess::enable_smap_smep_prot}, scheduler::global_init_scheduler, timer::initialize_hpet}, bootinfo::BootInfo, early_println, isolation::init_root_domain};
+use crate::{arch::{amd64::gdt::init_bootstrap_gdt, interrupt::init_table::init_interrupt_table}};
 
 pub mod serial;
-pub mod cpu;
+pub mod interrupt;
+pub mod memory;
+pub mod io;
+pub mod timer;
+pub mod apic;
+pub mod thread_registers;
 mod gdt;
-mod interrupts;
-mod ports;
-mod memory;
-mod acpi;
-mod apic;
-mod timer;
-pub mod scheduler;
-pub mod ipc;
-pub mod capability_sys;
-mod syscall;
 
-pub static CPUID_INFO: Once<CpuIdInfoFull> = Once::new();
-
-fn early_startup() {
-    instructions::interrupts::disable();
-
-    early_println!("Initializing GDT...");
+pub fn init_interrupts() {
     init_bootstrap_gdt();
-    early_println!("GDT initialized!");
+    init_interrupt_table();
+}
 
-    early_println!("Initializing IDT...");
-    init_idt();
-    early_println!("IDT Initialized!");
+const MSR_GS_BASE: u32 = 0xC000_0101;        
+const MSR_KERNEL_GS_BASE: u32 = 0xC000_0102; 
 
-    early_println!("Initializing memory subsystem...");
-    init_memory_subsys(MemoryInitInfo {
-        hhdm_offset: BootInfo::get().hhdm_offset().unwrap(),
-        memmap_entry: BootInfo::get().memmap_entries().unwrap()
-    });
-    early_println!("Memory subsystem initialized!");
+#[inline(always)]
+unsafe fn rdmsr(msr: u32) -> u64 {
+    unsafe {
+        let lo: u32;
+        let hi: u32;
+        core::arch::asm!(
+            "rdmsr",
+            in("ecx") msr,
+            out("eax") lo,
+            out("edx") hi,
+            options(nostack, preserves_flags),
+        );
+        ((hi as u64) << 32) | (lo as u64)
+    }
+}
 
-    early_println!("Initializing cpu submodule...");
+#[inline(always)]
+fn wrmsr(msr: u32, val: u64) {
+    unsafe {
+        let lo = val as u32;
+        let hi = (val >> 32) as u32;
+        core::arch::asm!(
+            "wrmsr",
+            in("ecx") msr,
+            in("eax") lo,
+            in("edx") hi,
+            options(nostack, preserves_flags),
+        );
+    }
+}
 
-    CPUID_INFO.call_once(|| {
-        early_println!("[CPUID] Fetching CPUID information...");
-        get_cpuid_full()
-    });
+#[inline]
+pub(crate) fn barrier() {
+    unsafe {
+        core::arch::asm!(
+            "mfence",
+            options(nomem, nostack, preserves_flags)
+        );
+    }
+}
 
-    early_println!("{}", CPUID_INFO.get().expect("Not initialized"));
-    early_println!("Cpu submodule intialized!");
+#[inline(always)]
+pub fn get_arch_specific_percpu_rg_ptr() -> u64 {
+    unsafe { rdmsr(MSR_GS_BASE) }
+}
 
-    early_println!("Initializing ACPI submodule...");
-    init_acpi(BootInfo::get().rsdp_addr().unwrap(), BootInfo::get().memmap_entries().unwrap());
-    early_println!("ACPI submodule intialized!");
-
-    early_println!("Initializing percpu memory regions...");
-    init_percpu_regions();
-    early_println!("Percpu memory regions initialized!");
-
-    early_println!("Attach PerCpu region to BSP core...");
-    early_setup_percpu_bsp(get_region_by_id(0).base);
-    early_println!("PerCpu region attached to BSP core!");
-
-    early_println!("Initializing HPET timer...");
-    initialize_hpet();
-    early_println!("HPET timer initialized!");
-
-    early_println!("Disabling legacy PIC...");
-    disable_pic();
-    early_println!("Legacy PIC disabled!");
-
-    early_println!("Initializing LAPIC for BSP...");
-    init_lapic(CPUID_INFO.get().unwrap().has_x2apic);
-    early_println!("LAPIC initialized!");
-
-    early_println!("Initializing IOAPIC...");
-    ioapic_manager_init();
-    early_println!("IOAPIC initialized!");
-
-    early_println!("Initializing root domain...");
-    init_root_domain(Some(vec![1]));
-    early_println!("Root domain initialized!");
-
-    early_println!("Prepare scheduler...");
-    global_init_scheduler();
-    early_println!("Scheduler prepared!");
-
-    if !enable_smap_smep_prot() {
-        early_println!("SMAP SMEP NOT DETECTED :(");
-    } else {
-        early_println!("SMAP SMEP enabled!");
+pub fn load_percpu_region_ptr_to_core(ptr: usize) {
+    let hi = ptr >> 48;
+    if hi != 0 && hi != 0xFFFF {
+        panic!("non-canonical GS base: {:#x}", ptr);
     }
 
-    instructions::interrupts::enable();
-}
-
-pub fn init_arch() {
-    early_println!("Initializing amd64 arch early startup...");
-    early_startup();
-    early_println!("Early startup finished!");
-}
-
-pub fn final_arch_init() -> ! {
-    smp_startup();
+    wrmsr(MSR_GS_BASE, ptr as u64); 
+    wrmsr(MSR_KERNEL_GS_BASE, ptr as u64); 
 }

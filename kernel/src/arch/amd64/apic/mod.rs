@@ -1,84 +1,67 @@
-use core::u32;
+use crate::{arch::{CurrentIOProvider, CurrentMemArchSpec, amd64::apic::lapic::Lapic}, define_per_cpu_struct, io_ops::IoOperations, memory::{misc::arch_specific::Arch, vmm::{kernel_pt_mapper, pflags::PFlags}}, platform_description::get_basic_board_info, serial_println};
 
-use x86_64::VirtAddr;
-
-use crate::{
-    arch::amd64::{
-        acpi::{get_acpi_tables, madt::MadTable}, apic::lapic::{Lapic, LapicTimerDivide}, memory::misc::phys_to_virt, ports::Port, timer::get_hpet
-    }, define_per_cpu_struct, early_println, irq
-};
-
-pub mod lapic;
-pub mod ioapic;
-pub mod ioapic_manager;
+pub (crate) mod lapic;
+pub (crate) mod ioapic;
 
 define_per_cpu_struct! {
-    pub struct PercpuLapic {
+    pub struct PERCPU_LAPIC {
         pub lapic: Lapic
     }
 }
 
 const PIC_MASTER_PORT: u16 = 0x20;
 const PIC_SLAVE_PORT: u16 = 0xA0;
-const TIMER_VECTOR: u8 = 0x30;
 
-pub fn disable_pic() {
-    let pic1 = Port::<u8>::new(PIC_MASTER_PORT + 1);
-    let pic2 = Port::<u8>::new(PIC_SLAVE_PORT + 1);
-
-    pic1.write(0xFF);
-    pic2.write(0xFF);
+fn disable_pic() {
+    CurrentIOProvider::write8((PIC_MASTER_PORT + 1) as usize, 0xFF);
+    CurrentIOProvider::write8((PIC_SLAVE_PORT + 1) as usize, 0xFF);
 }
 
-pub fn calibrate_lapic_timer(lapic: &Lapic) -> u32 {
-    const CALIBRATION_MS: u64 = 10;
+pub fn setup_local_interrupt_controller() {
+    disable_pic();
 
-    let hpet_ticks_target =
-        (CALIBRATION_MS * 1_000_000_000_000u64) / get_hpet().read().period_fs();
+    let has_x2 = get_basic_board_info().irq.local_controller.kind.support_x2_init;
 
-    lapic.set_timer_divide(LapicTimerDivide::Div16);
-    lapic.set_lvt_timer(TIMER_VECTOR, false);
-    lapic.set_timer_initial(u32::MAX);
-
-    let hpet_start = get_hpet().read().read_counter();
-    let lapic_start = lapic.read_timer_current();
-
-    while get_hpet().read().read_counter().wrapping_sub(hpet_start) < hpet_ticks_target {
-        core::hint::spin_loop();
-    }
-
-    let lapic_end = lapic.read_timer_current();
-
-    lapic_start.wrapping_sub(lapic_end)
-}
-
-pub fn init_lapic(x2_supported: bool) {
-    if x2_supported {
-        PercpuLapic::with_guard(|plapic| {
-            plapic.lapic = Lapic::newx2();
-            plapic.lapic.enable();
-            plapic.lapic.set_task_priority(0);
+    if has_x2 {
+        serial_println!("Setup x2lapic controllers...");
+        PERCPU_LAPIC::with_guard(|x2lapic| {
+            x2lapic.lapic = Lapic::newx2();
+            x2lapic.lapic.enable();
+            x2lapic.lapic.set_task_priority(0);
         });
-        early_println!("Initialized x2lapic");
         return;
     }
 
-    let lapic_addr = get_acpi_tables().read().get_table::<MadTable>().unwrap().lapic_addr;
-    PercpuLapic::with_guard(|plapic| {
-        let lapic_virt = VirtAddr::new(phys_to_virt(lapic_addr.as_u64() as usize) as u64);
-        plapic.lapic = Lapic::new(lapic_addr, lapic_virt);
+    let lapic_addr = get_basic_board_info().irq.local_controller.physical_addr;
+
+    let lapic_virt = CurrentMemArchSpec::phys_to_virt(lapic_addr);
+
+    let flags = unsafe {
+        PFlags::from_data(
+            1 << 0 |  // PRESENT
+            1 << 1 |  // RW
+            1 << 3 |  // PWT
+            1 << 4 |  // PCD
+            1 << 8 |  // GLOBAL
+            (1 << 63) // NX
+        )
+    };
+
+    let mut mapper = kernel_pt_mapper(); 
+
+    mapper.map_phys(lapic_virt, lapic_addr, flags)
+            .expect("LAPIC MMIO mapping failed")
+            .flush();
+
+    PERCPU_LAPIC::with_guard(|plapic| {
+        plapic.lapic = Lapic::new(lapic_virt);
         plapic.lapic.enable();
         plapic.lapic.set_task_priority(0);
     });
 }
 
-pub fn start_timer(lapic: &Lapic) {
-    let ticks_10ms = calibrate_lapic_timer(lapic);
-    let ticks_1ms = ticks_10ms / 10;
+pub fn setup_global_interrupt_controllers() {
+    //todo setup ioapic
 
-    lapic.setup_timer_periodic(
-        TIMER_VECTOR,
-        LapicTimerDivide::Div16,          
-        ticks_1ms,  
-    );
+    let ioapic_controllers = &get_basic_board_info().irq.controllers;
 }

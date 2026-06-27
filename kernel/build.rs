@@ -13,6 +13,14 @@ fn main() {
     println!("cargo:rustc-link-arg=-T{linker_script}");
     println!("cargo:rerun-if-changed={linker_script}");
 
+    let target = std::env::var("TARGET").unwrap();
+
+    if target.contains("x86_64") {
+        println!("cargo:rustc-cfg=platform_acpi");
+    } else if target.contains("aarch64") || target.contains("riscv64") {
+        println!("cargo:rustc-cfg=platform_device_tree");
+    }
+
     let src_dir = Path::new("src");
     let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
 

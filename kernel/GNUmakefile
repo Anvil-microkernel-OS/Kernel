@@ -9,7 +9,7 @@ override OUTPUT := kernel
 # Convenience macro to reliably declare user overridable variables.
 override USER_VARIABLE = $(if $(filter $(origin $(1)),default undefined),$(eval override $(1) := $(2)))
 
-# Target architecture to build for. Default to x86_64.
+# Target architecture to build for. Default to x86_64. riscv64
 $(call USER_VARIABLE,KARCH,x86_64)
 
 ifeq ($(RUST_TARGET),)

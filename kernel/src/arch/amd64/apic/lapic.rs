@@ -1,15 +1,6 @@
-use x86_64::{
-    PhysAddr, VirtAddr,
-    structures::paging::{Page, PageTableFlags, Size4KiB},
-    registers::model_specific::Msr,
-};
-use raw_cpuid::CpuId;
+use x86_64::registers::model_specific::Msr;
 
-use crate::{
-    arch::amd64::memory::vmm::kmap_mmio_page,
-    misc::registers::{RegisterRO, RegisterRW, RegisterWO},
-    register_struct,
-};
+use crate::{memory::misc::primitives::VirtAddr, misc::registers::{RegisterRO, RegisterRW, RegisterWO}, register_struct};
 
 // xAPIC flags
 const SVR_ENABLE: u32 = 0x100;
@@ -97,17 +88,9 @@ unsafe impl Send for Lapic {}
 unsafe impl Sync for Lapic {}
 
 impl Lapic {
-    pub fn new(phys_addr: PhysAddr, virt_addr: VirtAddr) -> Self {
-        let page = Page::<Size4KiB>::containing_address(virt_addr);
-        let aligned_virt_addr = page.start_address();
-
-        let flags = PageTableFlags::PRESENT
-            | PageTableFlags::WRITABLE
-            | PageTableFlags::NO_CACHE;
-
-        kmap_mmio_page(aligned_virt_addr, phys_addr, flags);
+    pub fn new(mapped_addr: VirtAddr) -> Self {;
         let registers = unsafe {
-            LAPICRegisters::from_address(aligned_virt_addr.as_u64() as usize)
+            LAPICRegisters::from_address(mapped_addr.as_usize())
         };
 
         Self {

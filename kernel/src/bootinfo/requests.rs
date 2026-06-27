@@ -1,4 +1,6 @@
-use limine::{BaseRevision, mp::RequestFlags, request::{ExecutableCmdlineRequest, FramebufferRequest, HhdmRequest, MemoryMapRequest, ModuleRequest, MpRequest, RequestsEndMarker, RequestsStartMarker, RsdpRequest}};
+#[cfg(target_arch = "x86_64")]
+use limine::mp::RequestFlags;
+use limine::{BaseRevision, request::{ExecutableCmdlineRequest, FramebufferRequest, HhdmRequest, MemoryMapRequest, ModuleRequest, MpRequest, RequestsEndMarker, RequestsStartMarker, RsdpRequest}};
 
 #[used]
 #[unsafe(link_section = ".requests")]
@@ -24,6 +26,12 @@ pub static RSDP_REQUEST: RsdpRequest = RsdpRequest::new();
 #[unsafe(link_section = ".requests")]
 pub static CMD_REQUEST: ExecutableCmdlineRequest = ExecutableCmdlineRequest::new();
 
+#[cfg(not(target_arch = "x86_64"))]
+#[used]
+#[unsafe(link_section = ".requests")]
+pub static SMP_REQUEST: MpRequest = MpRequest::new();
+
+#[cfg(target_arch = "x86_64")]
 #[used]
 #[unsafe(link_section = ".requests")]
 pub static SMP_REQUEST: MpRequest = MpRequest::new().with_flags(RequestFlags::X2APIC);

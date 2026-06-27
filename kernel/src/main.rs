@@ -1,33 +1,30 @@
 #![no_std]
 #![no_main]
-#![feature(cell_leak)]
-#![feature(abi_x86_interrupt)]
 
-use alloc::{format, vec};
 use core::fmt::Write;
-use crate::arch::amd64::scheduler::exec_loader::make_init_task;
-use crate::arch::amd64::scheduler::task_storage::{register_process, register_thread, spawn_thread};
-use crate::arch::{phase1_init_platform_specific, phase2_init_platform_specific};
+use crate::arch::early_startup;
+use crate::arch::interrupt::halt;
 use crate::bootinfo::BootInfo;
-use crate::cpio_parser::cpio_find;
 use crate::early_print::fb_printer::{RENDERER, ScrollingFbTextRenderer};
 use crate::framebuffer::Framebuffer;
-use crate::isolation::init_root_domain;
-use crate::panic::panic_screen;
+use crate::scheduling::core::{init_scheduler_percpu, initialize_cpu_descr_storages};
 extern crate alloc;
 
 mod arch;
 mod serial;
-mod selftest;
-mod cmd_args;
 pub mod framebuffer;
 mod early_print;
 mod bootinfo;
-mod misc;
-mod cpio_parser;
-mod core_messaging;
 mod panic;
-mod isolation;
+pub mod interrupt;
+mod memory;
+pub mod platform_description;
+pub mod io_ops;
+pub mod percpu;
+pub mod smp;
+pub mod timer;
+pub mod misc;
+pub mod scheduling;
 
 include!(concat!(env!("OUT_DIR"), "/kernel_version.rs"));
 
@@ -56,11 +53,11 @@ pub fn print_hello_banner() {
 
 #[unsafe(no_mangle)]
 unsafe extern "C" fn kmain() -> ! {
-    
-    BootInfo::init();
-    
+    BootInfo::init(); 
     assert!(BootInfo::get().bootloader_supported());
-    
+
+    serial_print!("kmain started!\n");
+
     Framebuffer::init(
         BootInfo::get().framebuffer().unwrap().addr(), 
         BootInfo::get().framebuffer().unwrap().width() as usize, 
@@ -73,38 +70,26 @@ unsafe extern "C" fn kmain() -> ! {
         FONT,
         Framebuffer::get_global()
     );
-    
+
     print_hello_banner();
 
-    phase1_init_platform_specific();
+    early_startup();
 
-    early_println!("Detecting CPIO...");
+    initialize_cpu_descr_storages(1);
+    init_scheduler_percpu();
 
-    let init_srvs = BootInfo::get_init_srvs().expect("No init pack of services found!");
-
-    early_println!("Detected CPIO!");
-
-    early_println!("Detecting init service...");
-
-    let future_pid = 1;
-
-    if let Some(data) = cpio_find(init_srvs, "init.bin") {
-        let init = make_init_task(data, future_pid, 0, "init", init_srvs).unwrap();
-        register_process(init.0);
-        register_thread(&init.1);
-        spawn_thread(init.1);
-        early_println!("Init service detected & pushed to exec!");
-    } else {
-        panic!("No init service found!");
+    loop {
+        halt();
     }
-
-    early_println!("Post init arch...");
-
-    phase2_init_platform_specific()
 }
 
 #[panic_handler]
 fn rust_panic(_info: &core::panic::PanicInfo) -> ! {
-    let message = format!("Kernel Panic at: {:?}\nMessage: {:?}\n", _info.location(), _info.message());
-    panic_screen(message.as_str(), true);
+    serial_print!("Kernel panic at: {:?}\nMessage:{:?}\n", _info.location(), _info.message());
+    //let message = format!("Kernel Panic at: {:?}\nMessage: {:?}\n", _info.location(), _info.message());
+    //panic_screen(message.as_str(), true);
+
+    loop {
+        halt();
+    }
 }

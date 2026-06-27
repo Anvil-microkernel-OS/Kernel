@@ -5,7 +5,7 @@ MAKEFLAGS += -rR
 # Convenience macro to reliably declare user overridable variables.
 override USER_VARIABLE = $(if $(filter $(origin $(1)),default undefined),$(eval override $(1) := $(2)))
 
-# Target architecture to build for. Default to x86_64.
+# Target architecture to build for. Default to x86_64. riscv64
 $(call USER_VARIABLE,KARCH,x86_64)
 
 # Default user QEMU flags. These are appended to the QEMU command calls.
@@ -71,19 +71,14 @@ run-hdd-x86_64: ovmf/ovmf-code-$(KARCH).fd ovmf/ovmf-vars-$(KARCH).fd $(IMAGE_NA
 
 .PHONY: run-aarch64
 run-aarch64: ovmf/ovmf-code-$(KARCH).fd ovmf/ovmf-vars-$(KARCH).fd $(IMAGE_NAME).iso
-	qemu-system-$(KARCH) \
-		-M virt \
-		-cpu cortex-a72 \
-		-device ramfb \
-		-device qemu-xhci \
-		-device usb-kbd \
-		-device usb-mouse \
-		-drive if=pflash,unit=0,format=raw,file=ovmf/ovmf-code-$(KARCH).fd,readonly=on \
-		-drive if=pflash,unit=1,format=raw,file=ovmf/ovmf-vars-$(KARCH).fd \
-		-cdrom $(IMAGE_NAME).iso \
-		-serial stdio \
-		-display sdl \
-		$(QEMUFLAGS)
+	qemu-system-aarch64 \
+		-M virt -cpu cortex-a72 \
+		-device ramfb -device qemu-xhci -device usb-kbd \
+		-drive if=pflash,unit=0,format=raw,file=ovmf/ovmf-code-aarch64.fd,readonly=on \
+		-drive if=pflash,unit=1,format=raw,file=ovmf/ovmf-vars-aarch64.fd \
+		-cdrom template-aarch64.iso \
+		-serial stdio -display sdl -m 4G \
+		-d int -D qemu_arm.log
 
 .PHONY: run-hdd-aarch64
 run-hdd-aarch64: ovmf/ovmf-code-$(KARCH).fd ovmf/ovmf-vars-$(KARCH).fd $(IMAGE_NAME).hdd

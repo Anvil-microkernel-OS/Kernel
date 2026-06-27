@@ -1,7 +1,7 @@
-use crate::{arch::amd64::cpu::hlt_loop, early_print::{fb_printer::RENDERER}, serial_println};
+use crate::{early_print::fb_printer::RENDERER, serial_print};
 
 pub fn panic_screen(message: &str, kernel_reason: bool) -> ! {
-    serial_println!("{}", message);
+    serial_print!("{}\n", message);
     
     let mut renderer = RENDERER.get().unwrap().lock();
     renderer.set_color(0xFFFFFF, 0x0000AA);
@@ -34,5 +34,7 @@ pub fn panic_screen(message: &str, kernel_reason: bool) -> ! {
         cols - 4  
     );
     
-    hlt_loop();
+    loop {
+
+    }
 }
