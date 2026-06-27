@@ -122,6 +122,7 @@ pub fn arch_setup_timer() {
 
 const CALIBRATION_MS: u64 = 10;
 
+//todo - percpu timer calibration
 pub static TIMER_CALIBRATION_OFFSET_10MS: Once<u32> = Once::new();
 
 pub fn arch_calibrate_timer() {
