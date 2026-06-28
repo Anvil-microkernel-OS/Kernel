@@ -1,10 +1,9 @@
-use core::{arch::naked_asm, cell::UnsafeCell, ptr::addr_of, sync::atomic::{AtomicU64, Ordering}};
+use core::{cell::UnsafeCell, ptr::addr_of, sync::atomic::{AtomicU64, Ordering}};
 
 use alloc::{sync::Arc, vec::Vec};
 use spin::Once;
-use x86_64::registers::control::Cr3;
 
-use crate::{arch::{interrupt::halt, timer::TIMER_CALIBRATION_OFFSET_10MS}, define_per_cpu_struct, scheduling::{collections::{core_local_queue::ExecCpu, initialize_scheduler_collections, injection_table::injection_table}, primitives::{process::{Pid, Process}, thread::{Thread, Tid}}, task_loader::make_kernel_task}, serial_println, timer::enable_platform_timer};
+use crate::{arch::{CurrentMemArchSpec, interrupt::halt, sched_data::switch_to_task, timer::TIMER_CALIBRATION_OFFSET_10MS}, define_per_cpu_struct, memory::misc::{arch_specific::Arch, primitives::TableKind}, scheduling::{collections::{core_local_queue::ExecCpu, initialize_scheduler_collections, injection_table::injection_table}, primitives::{process::{Pid, Process}, thread::{Thread, Tid}}, task_loader::make_kernel_task}, serial_println, timer::enable_platform_timer};
 
 static CPU_NUM:    AtomicU64 = AtomicU64::new(0);
 static TICK_COUNT: AtomicU64 = AtomicU64::new(0);
@@ -97,8 +96,8 @@ pub fn init_scheduler_percpu() -> ! {
 
     let my_desc  = descriptors.cpu(cpu_id);
     let dummy_rsp: u64 = 0;
-    let idle_rsp  = unsafe { (*my_desc.idle_task.registers.get()).rsp };
-    let idle_cr3 = Cr3::read_raw().0.start_address().as_u64();
+    let idle_rsp  = unsafe { (*my_desc.idle_task.registers.get()).get_stack_ptr() };
+    let idle_cr3 = CurrentMemArchSpec::table(TableKind::Kernel).as_usize() as u64;
 
     SCHEDULING_STARTED.call_once(|| true);
     unsafe {
@@ -137,26 +136,4 @@ extern "C" fn idle_task() -> ! {
 
         halt();
     }
-}
-
-#[unsafe(naked)]
-pub(super) unsafe extern "C" fn switch_to_task(
-    previous_task_stack_pointer: *const u64,
-    next_task_stack_pointer: u64,
-    next_page_table: u64,
-) {
-    naked_asm!(
-        "push rax", "push rbx", "push rcx", "push rdx",
-        "push rbp", "push rsi", "push rdi",
-        "push r8",  "push r9",  "push r10", "push r11",
-        "push r12", "push r13", "push r14", "push r15",
-        "mov [rdi], rsp",
-        "mov rsp, rsi",
-        "mov cr3, rdx",
-        "pop r15", "pop r14", "pop r13", "pop r12",
-        "pop r11", "pop r10", "pop r9",  "pop r8",
-        "pop rdi", "pop rsi", "pop rbp", "pop rdx",
-        "pop rcx", "pop rbx", "pop rax",
-        "ret",
-    );
 }

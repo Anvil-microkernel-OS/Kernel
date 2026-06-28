@@ -4,7 +4,7 @@ use alloc::sync::Weak;
 use atomic_enum::atomic_enum;
 use spin::RwLock;
 
-use crate::{arch::thread_registers::ThreadRegisters, scheduling::primitives::{kernel_stack::KernelStack, process::Process}};
+use crate::{arch::sched_data::ThreadRegisters, scheduling::primitives::{kernel_stack::KernelStack, process::Process}};
 
 pub type Tid = u32;
 pub struct RunsOnCpuId(AtomicI32);

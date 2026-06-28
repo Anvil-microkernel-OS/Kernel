@@ -3,7 +3,7 @@ use core::{cell::UnsafeCell, sync::atomic::AtomicU64};
 use alloc::{string::String, sync::Arc};
 use spin::{Mutex, RwLock};
 
-use crate::{arch::{interrupt, thread_registers::ThreadRegisters}, scheduling::primitives::{kernel_stack::{DEFAULT_KERNEL_STACK_SIZE, allocate_kernel_stack}, process::{Pid, Process}, thread::{AtomicThreadState, RunsOnCpuId, Thread, ThreadState, Tid}}};
+use crate::{arch::{interrupt, sched_data::ThreadRegisters}, scheduling::primitives::{kernel_stack::{DEFAULT_KERNEL_STACK_SIZE, allocate_kernel_stack}, process::{Pid, Process}, thread::{AtomicThreadState, RunsOnCpuId, Thread, ThreadState, Tid}}};
 
 pub fn make_kernel_task(pid: Pid, tid: Tid, name: &'static str, entry_point: u64) -> (Arc<Process>, Thread) {
     let kernel_stack  = allocate_kernel_stack(DEFAULT_KERNEL_STACK_SIZE);

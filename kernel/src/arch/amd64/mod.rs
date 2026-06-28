@@ -6,7 +6,7 @@ pub mod memory;
 pub mod io;
 pub mod timer;
 pub mod apic;
-pub mod thread_registers;
+pub mod sched_data;
 mod gdt;
 
 pub fn init_interrupts() {

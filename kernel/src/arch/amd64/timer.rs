@@ -1,8 +1,6 @@
-use core::ptr::{self, NonNull};
-
 use spin::{Once, RwLock};
 
-use crate::{arch::apic::{PERCPU_LAPIC, lapic::LapicTimerDivide}, early_println, irq, memory::{misc::primitives::VirtAddr, vmm::{kernel_pt_mapper, pflags::PFlags}}, platform_description::get_basic_board_info};
+use crate::{arch::apic::{PERCPU_LAPIC, lapic::LapicTimerDivide}, early_println, memory::{misc::primitives::VirtAddr, vmm::{kernel_pt_mapper, pflags::PFlags}}, misc::registers::{RegisterRO, RegisterRW, RegisterWO}, platform_description::get_basic_board_info, register_struct};
 
 const HPET_CFG_ENABLE: u64 = 1 << 0;
 const HPET_CFG_LEGACY: u64 = 1 << 1;
@@ -10,19 +8,16 @@ pub const TIMER_VECTOR: u8 = 0x30;
 
 static HPET_GLOBAL: Once<RwLock<HPET>> = Once::new();
 
-#[repr(C)]
-struct HpetRegisters {
-    general_cap_id:     u64,      // 0x000
-    _rsv0:              u64,      // 0x008
-    general_config:     u64,      // 0x010
-    _rsv_cfg2:          u64,      // 0x018 (RESERVED)
-    general_int_status: u64,      // 0x020
-    _rsv1:              [u64; 25],// 0x028 .. 0x0EF
-    main_counter:       u64,      // 0x0F0
+register_struct! {
+    HpetRegisters {
+        0x000 => general_cap_id: RegisterRO<u64>,
+        0x010 => general_config: RegisterWO<u64>,
+        0x0F0 => main_counter: RegisterRW<u64>
+    }
 }
 
 pub struct HPET {
-    regs: NonNull<HpetRegisters>,
+    regs: HpetRegisters,
     /// femtoseconds per tick (from capabilities bits 63:32)
     period_fs: u64,
 }
@@ -32,25 +27,20 @@ unsafe impl Sync for HPET {}
 
 impl HPET {
     pub fn init(&mut self, enable_legacy: bool) {
-        unsafe {
-            let r = self.regs.as_ptr();
-            ptr::write_volatile(&mut (*r).general_config, 0);
-            let caps = ptr::read_volatile(&(*r).general_cap_id);
-            self.period_fs = caps >> 32;
-            ptr::write_volatile(&mut (*r).main_counter, 0);
-            let mut cfg = HPET_CFG_ENABLE;
-            if enable_legacy {
-                cfg |= HPET_CFG_LEGACY;
-            }
-            ptr::write_volatile(&mut (*r).general_config, cfg);
+        self.regs.general_config().write(0);
+        let caps = self.regs.general_cap_id().read();
+        self.period_fs = caps >> 32;
+        self.regs.main_counter().write(0);
+        let mut cfg = HPET_CFG_ENABLE;
+        if enable_legacy {
+            cfg |= HPET_CFG_LEGACY;
         }
+        self.regs.general_config().write(cfg);
     }
 
     #[inline(always)]
     pub fn read_counter(&self) -> u64 {
-        unsafe {
-            ptr::read_volatile(&(*self.regs.as_ptr()).main_counter)
-        }
+        self.regs.main_counter().read()
     }
 
     #[inline(always)]
@@ -100,8 +90,9 @@ pub fn arch_setup_timer() {
             .flush();
     }
 
-    let regs = NonNull::new(hpet_virt_base.as_mut_ptr::<HpetRegisters>())
-        .expect("HPET MMIO mapping failed");
+    let regs = unsafe {
+        HpetRegisters::from_address(hpet_virt_base.as_usize())
+    };
 
     let mut hpet = HPET {
         regs,
