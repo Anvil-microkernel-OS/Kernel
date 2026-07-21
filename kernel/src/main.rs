@@ -25,6 +25,7 @@ pub mod smp;
 pub mod timer;
 pub mod misc;
 pub mod scheduling;
+pub mod cap_sys;
 
 include!(concat!(env!("OUT_DIR"), "/kernel_version.rs"));
 

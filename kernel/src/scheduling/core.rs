@@ -3,7 +3,7 @@ use core::{cell::UnsafeCell, ptr::addr_of, sync::atomic::{AtomicU64, Ordering}};
 use alloc::{sync::Arc, vec::Vec};
 use spin::Once;
 
-use crate::{arch::{CurrentMemArchSpec, interrupt::halt, sched_data::switch_to_task, timer::TIMER_CALIBRATION_OFFSET_10MS}, define_per_cpu_struct, memory::misc::{arch_specific::Arch, primitives::TableKind}, scheduling::{collections::{core_local_queue::ExecCpu, initialize_scheduler_collections, injection_table::injection_table}, primitives::{process::{Pid, Process}, thread::{Thread, Tid}}, task_loader::make_kernel_task}, serial_println, timer::enable_platform_timer};
+use crate::{arch::{CurrentMemArchSpec, interrupt::halt, sched_data::switch_to_task, timer::TIMER_CALIBRATION_OFFSET_10MS}, define_per_cpu_struct, define_per_cpu_u64, memory::misc::{arch_specific::Arch, primitives::{TableKind, VirtAddr}}, scheduling::{collections::{core_local_queue::ExecCpu, initialize_scheduler_collections, injection_table::injection_table}, primitives::{process::{Pid, Process}, thread::{Thread, ThreadState, Tid}}, task_loader::make_kernel_task}, serial_println, timer::enable_platform_timer};
 
 static CPU_NUM:    AtomicU64 = AtomicU64::new(0);
 static TICK_COUNT: AtomicU64 = AtomicU64::new(0);
@@ -74,6 +74,14 @@ define_per_cpu_struct! {
     }
 }
 
+define_per_cpu_u64!(
+    pub(super) TOP_OF_KERNEL_STACK
+);
+
+define_per_cpu_u64!(
+    pub(super) USER_STACK_SCRATCH
+);
+
 pub fn initialize_cpu_descr_storages(cpu_count: usize) {
     CPU_DESCRIPTORS.call_once(|| CpuDescriptorStorage::new(cpu_count));
 }
@@ -109,7 +117,7 @@ pub fn init_scheduler_percpu() -> ! {
 
 extern "C" fn idle_task() -> ! {
     loop {
-        serial_println!("Hello from idle task!");
+        //serial_println!("Hello from idle task!");
         PERCPU_SCHEDULER_DAT::with_guard(|data| { data.in_rescheduling = true; });
 
         const STEAL_BATCH: usize = 4;
@@ -137,3 +145,69 @@ extern "C" fn idle_task() -> ! {
         halt();
     }
 }
+
+/*
+pub fn process_scheduler_tick() {
+    if PERCPU_SCHEDULER_DAT::get().in_rescheduling { return; }
+
+    let my_id    = PERCPU_SCHEDULER_DAT::get().cpu_id;
+    let my_desc  = PERCPU_SCHEDULER_DAT::get().descriptors.cpu_mut(my_id);
+    let curr_ptr = my_desc.get_curr_task();
+    let next_task = my_desc.tasks.pop();
+
+    match (curr_ptr.is_null(), next_task) {
+        (true, None) => {}
+
+        (false, None) => {}
+
+        (true, Some(next)) => {
+            let next_ptr = Arc::into_raw(next) as *mut Thread;
+            unsafe {
+                (*next_ptr).runs_on.set_new_runner(my_id as i32);
+
+                (*next_ptr).state.store(ThreadState::Running, Ordering::Release);
+                my_desc.set_curr_task(next_ptr);
+                PERCPU_SCHEDULER_DAT::get_mut().curr_thread_id = (*next_ptr).tid;
+
+                set_per_cpu_TOP_OF_KERNEL_STACK((*next_ptr).kernel_stack.top.as_usize() as u64);
+                //set_tss_rsp0(VirtAddr::new((*next_ptr).kernel_stack.top.as_u64()));
+
+                let idle_rsp_ptr = addr_of!((*my_desc.idle_task.registers.get()).rsp);
+                let next_rsp     = (*(*next_ptr).registers.get()).rsp;
+                let next_cr3     = thread_cr3(next_ptr);
+
+               // apply_iopb(next_ptr);
+
+                switch_to_task(idle_rsp_ptr, next_rsp, next_cr3);
+            }
+        }
+
+        (false, Some(next)) => {
+            let next_ptr = Arc::into_raw(next) as *mut Thread;
+            unsafe {
+                let task_rsp_ptr = addr_of!((*(*curr_ptr).registers.get()).rsp);
+
+                (*curr_ptr).runs_on.set_new_runner(UNDEFINED_APIC_RUNNER_ID);
+                (*next_ptr).runs_on.set_new_runner(my_id as i32);
+
+                (*curr_ptr).state.store(ThreadState::Ready, Ordering::Release);
+                let curr_arc = Arc::from_raw(curr_ptr);
+                my_desc.tasks.push(curr_arc);
+
+                (*next_ptr).state.store(ThreadState::Running, Ordering::Release);
+                my_desc.set_curr_task(next_ptr);
+                PERCPU_SCHEDULER_DAT::get_mut().curr_thread_id = (*next_ptr).tid;
+
+                set_per_cpu_TOP_OF_KERNEL_STACK((*next_ptr).kernel_stack.top.as_usize() as u64);
+                set_tss_rsp0(VirtAddr::new((*next_ptr).kernel_stack.top.as_usize()));
+
+                let next_rsp = (*(*next_ptr).registers.get()).rsp;
+                let next_cr3 = thread_cr3(next_ptr);
+
+                //apply_iopb(next_ptr);
+
+                switch_to_task(task_rsp_ptr, next_rsp, next_cr3);
+            }
+        }
+    }
+}*/
