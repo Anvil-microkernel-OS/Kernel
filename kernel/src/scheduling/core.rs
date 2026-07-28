@@ -1,9 +1,9 @@
-use core::{cell::UnsafeCell, ptr::addr_of, sync::atomic::{AtomicU64, Ordering}};
+use core::{cell::UnsafeCell, cmp::min, ptr::addr_of_mut, sync::atomic::{AtomicU64, Ordering}};
 
 use alloc::{sync::Arc, vec::Vec};
 use spin::Once;
 
-use crate::{arch::{CurrentMemArchSpec, interrupt::halt, sched_data::switch_to_task, timer::TIMER_CALIBRATION_OFFSET_10MS}, define_per_cpu_struct, define_per_cpu_u64, memory::misc::{arch_specific::Arch, primitives::{TableKind, VirtAddr}}, scheduling::{collections::{core_local_queue::ExecCpu, initialize_scheduler_collections, injection_table::injection_table}, primitives::{process::{Pid, Process}, thread::{Thread, ThreadState, Tid}}, task_loader::make_kernel_task}, serial_println, timer::enable_platform_timer};
+use crate::{arch::{CurrentMemArchSpec, interrupt::halt, sched_data::switch_to_task, timer::TIMER_CALIBRATION_OFFSET_10MS}, define_per_cpu_struct, define_per_cpu_u64, memory::misc::primitives::TableKind, scheduling::{collections::{core_local_queue::ExecCpu, initialize_scheduler_collections, injection_table::injection_table}, primitives::{process::{Pid, Process}, thread::{Thread, Tid}}, task_loader::make_kernel_task}, timer::enable_platform_timer};
 
 static CPU_NUM:    AtomicU64 = AtomicU64::new(0);
 static TICK_COUNT: AtomicU64 = AtomicU64::new(0);
@@ -20,38 +20,50 @@ impl CpuDescriptorStorage {
         initialize_scheduler_collections();
         let mut cpus = Vec::with_capacity(n_cpus);
         let mut kernel_processes = Vec::with_capacity(n_cpus);
-        
+
         for cpu_id in 0..n_cpus {
             let (idle_proc, idle_thread) = make_kernel_task(
-                cpu_id as Pid, cpu_id as Tid, "idle", idle_task as u64);
-                
+                cpu_id as Pid, cpu_id as Tid, "idle", idle_task as usize as u64);
+
             kernel_processes.push(idle_proc);
             cpus.push(UnsafeCell::new(ExecCpu::new(idle_thread)));
         }
-        
+
         Self { cpus, kernel_processes }
+    }
+
+    pub fn cpu_count(&self) -> usize {
+        self.cpus.len()
+    }
+
+    pub fn kernel_process(&self, cpu: usize) -> &Arc<Process> {
+        &self.kernel_processes[cpu]
     }
 
     pub fn cpu(&self, cpu: usize) -> &ExecCpu {
         unsafe { &*self.cpus[cpu].get() }
     }
 
-    pub fn cpu_mut(&self, cpu: usize) -> &mut ExecCpu {
+    pub unsafe fn cpu_mut(&self, cpu: usize) -> &mut ExecCpu {
         unsafe { &mut *self.cpus[cpu].get() }
     }
 
-    pub fn try_to_steal_into(&self, me: usize, buf: &mut [Option<Arc<Thread>>]) -> usize {
+    pub fn try_to_steal_into(&self, me: usize, buf: &mut [Option<Arc<Thread>>], steal_batch: usize) -> usize {
         let mut count = 0;
-        let steal_batch = 1; 
+        if buf.is_empty() || steal_batch == 0 { return 0; }
+
+        let my_len = self.cpu(me).tasks.len();
 
         for (idx, cpu_cell) in self.cpus.iter().enumerate() {
             if idx == me { continue; }
-            let cpu = unsafe { &*cpu_cell.get() };
-            if cpu.tasks.len() < buf.len() { continue; }
+            if count >= buf.len() { break; }
 
-            let tasks = cpu.tasks.steal_n(steal_batch);
+            let cpu = unsafe { &*cpu_cell.get() };
+            if cpu.tasks.len() <= my_len + 1 { continue; }
+
+            let take = min(steal_batch, buf.len() - count);
+            let tasks = cpu.tasks.steal_n(take);
             for task in tasks {
-                if count >= buf.len() { return count; }
                 buf[count] = Some(task);
                 count += 1;
             }
@@ -87,35 +99,37 @@ pub fn initialize_cpu_descr_storages(cpu_count: usize) {
 }
 
 pub fn init_scheduler_percpu() -> ! {
-    let cpu_id = CPU_NUM.fetch_add(1, Ordering::Relaxed) as usize;
     let descriptors = CPU_DESCRIPTORS.get().expect("CPU_DESCRIPTORS not initialized");
+    let cpu_id = CPU_NUM.fetch_add(1, Ordering::AcqRel) as usize;
+    assert!(cpu_id < descriptors.cpu_count(), "more CPUs started than descriptors allocated");
 
     PERCPU_SCHEDULER_DAT::with_guard(|data| {
         data.cpu_id          = cpu_id;
         data.curr_thread_id  = descriptors.cpu(cpu_id).idle_task.tid;
         data.in_rescheduling = false;
-        data.descriptors     = CPU_DESCRIPTORS.get().unwrap();
+        data.descriptors     = descriptors;
         data.iopb_generation = 0;
         data.iopb_owner      = None;
     });
 
     //init_syscall_subsystem();
-    enable_platform_timer(TIMER_CALIBRATION_OFFSET_10MS.get().unwrap() / 10);
 
     let my_desc  = descriptors.cpu(cpu_id);
-    let dummy_rsp: u64 = 0;
+    let mut dummy_rsp: u64 = 0;
     let idle_rsp  = unsafe { (*my_desc.idle_task.registers.get()).get_stack_ptr() };
     let idle_cr3 = CurrentMemArchSpec::table(TableKind::Kernel).as_usize() as u64;
 
     SCHEDULING_STARTED.call_once(|| true);
     unsafe {
-        switch_to_task(addr_of!(dummy_rsp), idle_rsp, idle_cr3);
+        switch_to_task(addr_of_mut!(dummy_rsp), idle_rsp, idle_cr3);
     }
 
     unreachable!();
 }
 
 extern "C" fn idle_task() -> ! {
+    enable_platform_timer(TIMER_CALIBRATION_OFFSET_10MS.get().unwrap() / 10);
+
     loop {
         //serial_println!("Hello from idle task!");
         PERCPU_SCHEDULER_DAT::with_guard(|data| { data.in_rescheduling = true; });
@@ -124,25 +138,30 @@ extern "C" fn idle_task() -> ! {
         let mut global_buf: [Option<Arc<Thread>>; STEAL_BATCH] = [None, None, None, None];
         let mut steal_buf:  [Option<Arc<Thread>>; STEAL_BATCH] = [None, None, None, None];
 
-        let my_descr = PERCPU_SCHEDULER_DAT::get_mut().descriptors;
+        let my_descr = PERCPU_SCHEDULER_DAT::get().descriptors;
         let my_id    = PERCPU_SCHEDULER_DAT::get().cpu_id;
-        let my_cpu   = my_descr.cpu_mut(my_id);
 
-        let n = my_descr.try_to_steal_into(my_id, &mut steal_buf);
-        if n > 0 {
-            for slot in steal_buf[..n].iter_mut() {
+        let stolen = my_descr.try_to_steal_into(my_id, &mut steal_buf, STEAL_BATCH);
+        let taken = if stolen > 0 {
+            let my_cpu = unsafe { my_descr.cpu_mut(my_id) };
+            for slot in steal_buf[..stolen].iter_mut() {
                 if let Some(task) = slot.take() { my_cpu.tasks.push(task); }
             }
+            stolen
         } else {
             let n = injection_table().steal_into(&mut global_buf);
+            let my_cpu = unsafe { my_descr.cpu_mut(my_id) };
             for slot in global_buf[..n].iter_mut() {
                 if let Some(task) = slot.take() { my_cpu.tasks.push(task); }
             }
-        }
+            n
+        };
 
         PERCPU_SCHEDULER_DAT::with_guard(|data| { data.in_rescheduling = false; });
 
-        halt();
+        if taken == 0 {
+            halt();
+        }
     }
 }
 
@@ -176,7 +195,7 @@ pub fn process_scheduler_tick() {
                 let next_rsp     = (*(*next_ptr).registers.get()).rsp;
                 let next_cr3     = thread_cr3(next_ptr);
 
-               // apply_iopb(next_ptr);
+                // apply_iopb(next_ptr);
 
                 switch_to_task(idle_rsp_ptr, next_rsp, next_cr3);
             }
